@@ -32,7 +32,6 @@ public class Catalog {
      * Creates a new, empty catalog.
      */
     public Catalog() {
-        // TODO: some code goes here
     }
 
     /**

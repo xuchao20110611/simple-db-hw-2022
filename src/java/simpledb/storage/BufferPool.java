@@ -17,7 +17,7 @@ import java.util.concurrent.ConcurrentMap;
  * disk. Access methods call into it to retrieve pages, and it fetches
  * pages from the appropriate location.
  * <p>
- * The BufferPool is also responsible for locking;  when a transaction fetches
+ * The BufferPool is also responsible for locking; when a transaction fetches
  * a page, BufferPool checks that the transaction has the appropriate
  * locks to read/write the page.
  *
@@ -38,13 +38,19 @@ public class BufferPool {
      */
     public static final int DEFAULT_PAGES = 50;
 
+    private int num_pages_ = 0;
+
+    private ConcurrentHashMap<Integer, Page> pid_to_pages_ = new ConcurrentHashMap<Integer, Page>();
+    private ConcurrentHashMap<Integer, TransactionId> pid_to_tid_ = new ConcurrentHashMap<Integer, TransactionId>();
+    private static DbFile dbfile_;
+
     /**
      * Creates a BufferPool that caches up to numPages pages.
      *
      * @param numPages maximum number of pages in this buffer pool.
      */
     public BufferPool(int numPages) {
-        // TODO: some code goes here
+        num_pages_ = numPages;
     }
 
     public static int getPageSize() {
@@ -66,9 +72,9 @@ public class BufferPool {
      * Will acquire a lock and may block if that lock is held by another
      * transaction.
      * <p>
-     * The retrieved page should be looked up in the buffer pool.  If it
-     * is present, it should be returned.  If it is not present, it should
-     * be added to the buffer pool and returned.  If there is insufficient
+     * The retrieved page should be looked up in the buffer pool. If it
+     * is present, it should be returned. If it is not present, it should
+     * be added to the buffer pool and returned. If there is insufficient
      * space in the buffer pool, a page should be evicted and the new page
      * should be added in its place.
      *
@@ -78,8 +84,19 @@ public class BufferPool {
      */
     public Page getPage(TransactionId tid, PageId pid, Permissions perm)
             throws TransactionAbortedException, DbException {
-        // TODO: some code goes here
-        return null;
+        if (pid_to_pages_.size() == num_pages_ && pid_to_pages_.get(pid.getPageNumber()) == null) {
+            // unimplemented: eviction rules
+            throw new DbException("getPage");
+        }
+        if (pid_to_tid_.containsKey(pid.getPageNumber())) {
+            throw new TransactionAbortedException();
+        }
+        pid_to_tid_.put(pid.getPageNumber(), tid);
+        if (pid_to_pages_.get(pid.getPageNumber()) == null) {
+            pid_to_pages_.put(pid.getPageNumber(), dbfile_.readPage(pid));
+        }
+
+        return pid_to_pages_.get(pid.getPageNumber());
     }
 
     /**
@@ -128,7 +145,7 @@ public class BufferPool {
     }
 
     /**
-     * Add a tuple to the specified table on behalf of transaction tid.  Will
+     * Add a tuple to the specified table on behalf of transaction tid. Will
      * acquire a write lock on the page the tuple is added to and any other
      * pages that are updated (Lock acquisition is not needed for lab2).
      * May block if the lock(s) cannot be acquired.

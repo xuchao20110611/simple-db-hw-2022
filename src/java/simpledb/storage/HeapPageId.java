@@ -7,6 +7,9 @@ import java.util.Objects;
  */
 public class HeapPageId implements PageId {
 
+    private int table_id_;
+    private int page_num_;
+
     /**
      * Constructor. Create a page id structure for a specific page of a
      * specific table.
@@ -15,15 +18,15 @@ public class HeapPageId implements PageId {
      * @param pgNo    The page number in that table.
      */
     public HeapPageId(int tableId, int pgNo) {
-        // TODO: some code goes here
+        table_id_ = tableId;
+        page_num_ = pgNo;
     }
 
     /**
      * @return the table associated with this PageId
      */
     public int getTableId() {
-        // TODO: some code goes here
-        return 0;
+        return table_id_;
     }
 
     /**
@@ -31,8 +34,7 @@ public class HeapPageId implements PageId {
      *         this PageId
      */
     public int getPageNumber() {
-        // TODO: some code goes here
-        return 0;
+        return page_num_;
     }
 
     /**
@@ -42,8 +44,7 @@ public class HeapPageId implements PageId {
      * @see BufferPool
      */
     public int hashCode() {
-        // TODO: some code goes here
-        throw new UnsupportedOperationException("implement this");
+        return table_id_ * 997 + page_num_;
     }
 
     /**
@@ -54,13 +55,19 @@ public class HeapPageId implements PageId {
      *         ids are the same)
      */
     public boolean equals(Object o) {
-        // TODO: some code goes here
+        if (!(o instanceof HeapPageId))
+            return false;
+        if (((HeapPageId) o).page_num_ == page_num_
+                && ((HeapPageId) o).table_id_ == table_id_) {
+            return true;
+        }
         return false;
+
     }
 
     /**
      * Return a representation of this object as an array of
-     * integers, for writing to disk.  Size of returned array must contain
+     * integers, for writing to disk. Size of returned array must contain
      * number of integers that corresponds to number of args to one of the
      * constructors.
      */
