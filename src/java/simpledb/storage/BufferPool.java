@@ -42,7 +42,6 @@ public class BufferPool {
 
     private ConcurrentHashMap<Integer, Page> pid_to_pages_ = new ConcurrentHashMap<Integer, Page>();
     private ConcurrentHashMap<Integer, TransactionId> pid_to_tid_ = new ConcurrentHashMap<Integer, TransactionId>();
-    private static DbFile dbfile_;
 
     /**
      * Creates a BufferPool that caches up to numPages pages.
@@ -88,12 +87,17 @@ public class BufferPool {
             // unimplemented: eviction rules
             throw new DbException("getPage");
         }
-        if (pid_to_tid_.containsKey(pid.getPageNumber())) {
-            throw new TransactionAbortedException();
+        if (pid_to_tid_.containsKey(pid.getPageNumber()) && pid_to_tid_.get(pid.getPageNumber()) != tid) {
+            /*
+             * unimplemented: when evicted we need to clear the according recording in the
+             * map
+             */
+            // throw new TransactionAbortedException();
         }
         pid_to_tid_.put(pid.getPageNumber(), tid);
+        DbFile dbfile = Database.getCatalog().getDatabaseFile(pid.getTableId());
         if (pid_to_pages_.get(pid.getPageNumber()) == null) {
-            pid_to_pages_.put(pid.getPageNumber(), dbfile_.readPage(pid));
+            pid_to_pages_.put(pid.getPageNumber(), dbfile.readPage(pid));
         }
 
         return pid_to_pages_.get(pid.getPageNumber());
