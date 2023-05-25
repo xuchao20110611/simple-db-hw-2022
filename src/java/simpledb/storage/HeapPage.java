@@ -95,7 +95,7 @@ public class HeapPage implements Page {
      */
     private int getHeaderSize() {
 
-        return (int) Math.ceil(this.numSlots / 8);
+        return (int) Math.ceil((double) this.numSlots / 8);
 
     }
 
@@ -311,7 +311,7 @@ public class HeapPage implements Page {
                 System.out.println(header_byte_int);
             }
         }
-        return numSlots-unused_slot_num;
+        return numSlots - unused_slot_num;
     }
 
     /**

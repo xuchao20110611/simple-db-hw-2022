@@ -84,7 +84,7 @@ public class HeapFile implements DbFile {
         byte[] data = new byte[BufferPool.getPageSize()];
         HeapPage new_heappage;
         try {
-            RandomAccessFile rf = new RandomAccessFile(file_, "rw");
+            RandomAccessFile rf = new RandomAccessFile(file_, "r");
             rf.seek(BufferPool.getPageSize() * pid.getPageNumber());
             rf.read(data);
             rf.close();
@@ -158,8 +158,8 @@ public class HeapFile implements DbFile {
                 pageid_pos += 1;
                 PageId next_pageid = new HeapPageId(getId(), pageid_pos);
                 Page next_page = Database.getBufferPool().getPage(tid_, next_pageid, Permissions.READ_ONLY);
-                tuple_ite_ = ((HeapPage) next_page).iterator();
-                if (tuple_ite_.hasNext()) {
+                Iterator<Tuple> tuple_ite = ((HeapPage) next_page).iterator();
+                if (tuple_ite.hasNext()) {
                     return true;
                 }
             }
@@ -193,7 +193,7 @@ public class HeapFile implements DbFile {
             PageId next_pageid = new HeapPageId(getId(), pageid_pos_);
             Page next_page = Database.getBufferPool().getPage(tid_, next_pageid, Permissions.READ_ONLY);
             tuple_ite_ = ((HeapPage) next_page).iterator();
-            System.out.println("HeapFileIterator.open()");
+            // System.out.println("HeapFileIterator.open()");
         }
 
         @Override
