@@ -87,20 +87,22 @@ public class BufferPool {
             // unimplemented: eviction rules
             throw new DbException("getPage");
         }
-        if (pid_to_tid_.containsKey(pid.getPageNumber()) && pid_to_tid_.get(pid.getPageNumber()) != tid) {
+        int table_page_id = pid.getTableId() * 1025 + pid.getPageNumber();
+        if (pid_to_tid_.containsKey(table_page_id) && pid_to_tid_.get(table_page_id) != tid) {
             /*
              * unimplemented: when evicted we need to clear the according recording in the
              * map
              */
             // throw new TransactionAbortedException();
         }
-        pid_to_tid_.put(pid.getPageNumber(), tid);
+
+        pid_to_tid_.put(table_page_id, tid);
         DbFile dbfile = Database.getCatalog().getDatabaseFile(pid.getTableId());
-        if (pid_to_pages_.get(pid.getPageNumber()) == null) {
-            pid_to_pages_.put(pid.getPageNumber(), dbfile.readPage(pid));
+        if (pid_to_pages_.get(table_page_id) == null) {
+            pid_to_pages_.put(table_page_id, dbfile.readPage(pid));
         }
 
-        return pid_to_pages_.get(pid.getPageNumber());
+        return pid_to_pages_.get(table_page_id);
     }
 
     /**
