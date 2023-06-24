@@ -39,16 +39,23 @@ public class Aggregate extends Operator {
      * @param aop    The aggregation operator to use
      */
     public Aggregate(OpIterator child, int afield, int gfield, Aggregator.Op aop) {
+        Type aggregator_type = null;
+        if (gfield != -1) {
+            aggregator_type = child.getTupleDesc().getFieldType(gfield);
+        }
         if (child.getTupleDesc().getFieldType(afield) == Type.INT_TYPE) {
-            aggregator_ = new IntegerAggregator(gfield, child.getTupleDesc().getFieldType(gfield), afield, aop);
+
+            aggregator_ = new IntegerAggregator(gfield, aggregator_type, afield, aop);
         } else {
-            aggregator_ = new StringAggregator(gfield, child.getTupleDesc().getFieldType(gfield), afield, aop);
+            aggregator_ = new StringAggregator(gfield, aggregator_type, afield, aop);
         }
         child_ = child;
         afield_ = afield;
         gfield_ = gfield;
         aop_ = aop;
+
         try {
+            child_.open();
             while (child_.hasNext()) {
                 aggregator_.mergeTupleIntoGroup(child_.next());
             }
