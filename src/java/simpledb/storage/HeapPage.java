@@ -262,8 +262,20 @@ public class HeapPage implements Page {
      *                     already empty.
      */
     public void deleteTuple(Tuple t) throws DbException {
-        // TODO: some code goes here
-        // not necessary for lab1
+
+        int potentinal_pos = 0;
+        for (; potentinal_pos < numSlots; potentinal_pos++) {
+            if (isSlotUsed(potentinal_pos)) {
+                if (tuples[potentinal_pos].equals(t)) {
+                    break;
+                }
+            }
+        }
+        if (potentinal_pos == numSlots) {
+            throw new DbException("deleteTuple: tuple is not on this page or already empty");
+        }
+        tuples[potentinal_pos] = null;
+        markSlotUsed(potentinal_pos, false);
     }
 
     /**
@@ -275,8 +287,24 @@ public class HeapPage implements Page {
      *                     is mismatch.
      */
     public void insertTuple(Tuple t) throws DbException {
-        // TODO: some code goes here
-        // not necessary for lab1
+
+        if (!t.getTupleDesc().equals(td)) {
+            throw new DbException("tupleDesc is mismatch");
+        }
+        int potentinal_pos = 0;
+        for (; potentinal_pos < numSlots; potentinal_pos++) {
+            if (isSlotUsed(potentinal_pos)) {
+                continue;
+            } else {
+                break;
+            }
+        }
+        if (potentinal_pos == numSlots) {
+            throw new DbException("page is full");
+        }
+        tuples[potentinal_pos] = t;
+        markSlotUsed(potentinal_pos, true);
+
     }
 
     /**
@@ -308,7 +336,7 @@ public class HeapPage implements Page {
             while (header_byte_int != 0) {
                 unused_slot_num += header_byte_int & 0x01;
                 header_byte_int >>= 1;
-                System.out.println(header_byte_int);
+                // System.out.println(header_byte_int);
             }
         }
         return numSlots - unused_slot_num;
@@ -329,8 +357,15 @@ public class HeapPage implements Page {
      * Abstraction to fill or clear a slot on this page.
      */
     private void markSlotUsed(int i, boolean value) {
-        // TODO: some code goes here
-        // not necessary for lab1
+
+        int byte_num = i / 8;
+        int byte_remain = i - 8 * byte_num;
+        int header_byte_int = value ? 1 : 0;
+        header_byte_int <<= byte_remain;
+        byte set_byte = (byte) (0xff - (1 << byte_remain));
+        byte header_byte = (byte) header_byte_int;
+        header[byte_num] = (byte) (header[byte_num] & set_byte);
+        header[byte_num] = (byte) (header[byte_num] | header_byte);
     }
 
     /**
