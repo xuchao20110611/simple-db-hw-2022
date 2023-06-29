@@ -303,6 +303,8 @@ public class HeapPage implements Page {
             throw new DbException("page is full");
         }
         tuples[potentinal_pos] = t;
+        RecordId rid = new RecordId(pid, potentinal_pos);
+        t.setRecordId(rid);
         markSlotUsed(potentinal_pos, true);
 
     }
