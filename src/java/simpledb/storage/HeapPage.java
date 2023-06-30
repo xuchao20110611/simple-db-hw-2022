@@ -33,6 +33,9 @@ public class HeapPage implements Page {
     byte[] oldData;
     private final Byte oldDataLock = (byte) 0;
 
+    private boolean is_dirty_;
+    private TransactionId dirty_tid_;
+
     /**
      * Create a HeapPage from a set of bytes of data read from disk.
      * The format of a HeapPage is a set of header bytes indicating
@@ -314,8 +317,8 @@ public class HeapPage implements Page {
      * that did the dirtying
      */
     public void markDirty(boolean dirty, TransactionId tid) {
-        // TODO: some code goes here
-        // not necessary for lab1
+        is_dirty_ = dirty;
+        dirty_tid_ = tid;
     }
 
     /**
@@ -323,9 +326,11 @@ public class HeapPage implements Page {
      * the page is not dirty
      */
     public TransactionId isDirty() {
-        // TODO: some code goes here
-        // Not necessary for lab1
-        return null;
+        if (is_dirty_) {
+            return dirty_tid_;
+        } else {
+            return null;
+        }
     }
 
     /**
