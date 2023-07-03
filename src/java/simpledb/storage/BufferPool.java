@@ -171,35 +171,43 @@ public class BufferPool {
     public void insertTuple(TransactionId tid, int tableId, Tuple t)
             throws DbException, IOException, TransactionAbortedException {
 
-        int page_num = 0;
-        boolean is_insert = false;
+        // int page_num = 0;
+        // boolean is_insert = false;
         tid_to_permission_.put(tid, Permissions.READ_WRITE);
-        while (!is_insert) {
-            PageId pid = new HeapPageId(tableId, page_num);
-            Page page = getPage(tid, pid, Permissions.READ_WRITE);
-
-            page.markDirty(true, tid);
-            try {
-                synchronized (page) {
-                    ((HeapPage) page).insertTuple(t);
-                    is_insert = true;
-                }
-
-            } catch (DbException e) {
-                page_num++;
-            }
-
-        }
-        if (!is_insert) {
-            // make a new page
-            HeapPageId pid = new HeapPageId(tableId, page_num);
-            HeapPage page = new HeapPage(pid, HeapPage.createEmptyPageData());
-            int table_page_id = tableId * 1025 + page_num;
+        List<Page> modified_page = Database.getCatalog().getDatabaseFile(tableId).insertTuple(tid, t);
+        for (Page page : modified_page) {
             // unimplemented: eviction rules
-            pid_to_pages_.put(table_page_id, page);
-            pid_to_tid_.put(table_page_id, tid);
-            page.insertTuple(t);
+            page.markDirty(true, tid);
+            int page_num = page.getId().getPageNumber();
+            pid_to_pages_.put(tableId * 1025 + page_num, page);
+            pid_to_tid_.put(tableId * 1025 + page_num, tid);
         }
+        // while (!is_insert) {
+        // PageId pid = new HeapPageId(tableId, page_num);
+        // Page page = getPage(tid, pid, Permissions.READ_WRITE);
+
+        // page.markDirty(true, tid);
+        // try {
+        // synchronized (page) {
+        // ((HeapPage) page).insertTuple(t);
+        // is_insert = true;
+        // }
+
+        // } catch (DbException e) {
+        // page_num++;
+        // }
+
+        // }
+        // if (!is_insert) {
+        // // make a new page
+        // HeapPageId pid = new HeapPageId(tableId, page_num);
+        // HeapPage page = new HeapPage(pid, HeapPage.createEmptyPageData());
+        // int table_page_id = tableId * 1025 + page_num;
+        // // unimplemented: eviction rules
+        // pid_to_pages_.put(table_page_id, page);
+        // pid_to_tid_.put(table_page_id, tid);
+        // page.insertTuple(t);
+        // }
     }
 
     /**
@@ -217,27 +225,36 @@ public class BufferPool {
      */
     public void deleteTuple(TransactionId tid, Tuple t)
             throws DbException, IOException, TransactionAbortedException {
-        int page_num = 0;
-        boolean is_delete = false;
+        // int page_num = 0;
+        // boolean is_delete = false;
         tid_to_permission_.put(tid, Permissions.READ_WRITE);
-        while (!is_delete) {
-            PageId pid = new HeapPageId(t.getRecordId().getPageId().getTableId(), page_num);
-            Page page = getPage(tid, pid, Permissions.READ_WRITE);
-
+        int tableId = t.getRecordId().getPageId().getTableId();
+        List<Page> modified_page = Database.getCatalog().getDatabaseFile(tableId).deleteTuple(tid, t);
+        for (Page page : modified_page) {
             page.markDirty(true, tid);
-            try {
-                synchronized (page) {
-                    ((HeapPage) page).deleteTuple(t);
-                    is_delete = true;
-                }
+            int page_num = page.getId().getPageNumber();
+            pid_to_pages_.put(tableId * 1025 + page_num, page);
+            pid_to_tid_.put(tableId * 1025 + page_num, tid);
+        }
+        // while (!is_delete) {
+        // PageId pid = new HeapPageId(t.getRecordId().getPageId().getTableId(),
+        // page_num);
+        // Page page = getPage(tid, pid, Permissions.READ_WRITE);
 
-            } catch (DbException e) {
-                page_num++;
-            }
-        }
-        if (!is_delete) {
-            throw new DbException("BufferPool::deleteTuple: delete failed");
-        }
+        // page.markDirty(true, tid);
+        // try {
+        // synchronized (page) {
+        // ((HeapPage) page).deleteTuple(t);
+        // is_delete = true;
+        // }
+
+        // } catch (DbException e) {
+        // page_num++;
+        // }
+        // }
+        // if (!is_delete) {
+        // throw new DbException("BufferPool::deleteTuple: delete failed");
+        // }
     }
 
     /**

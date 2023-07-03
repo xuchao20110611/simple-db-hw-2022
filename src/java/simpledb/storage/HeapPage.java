@@ -265,11 +265,20 @@ public class HeapPage implements Page {
      *                     already empty.
      */
     public void deleteTuple(Tuple t) throws DbException {
-
+        if (!t.getTupleDesc().equals(td)) {
+            throw new DbException("HeapPage::deleteTuple: tupleDesc is mismatch");
+        }
         int potentinal_pos = 0;
         for (; potentinal_pos < numSlots; potentinal_pos++) {
             if (isSlotUsed(potentinal_pos)) {
-                if (tuples[potentinal_pos].equals(t)) {
+                int tuple_size = td.numFields();
+                int i = 0;
+                for (; i < tuple_size; i++) {
+                    if (!t.getField(i).equals(tuples[potentinal_pos].getField(i))) {
+                        break;
+                    }
+                }
+                if (i == tuple_size) {
                     break;
                 }
             }

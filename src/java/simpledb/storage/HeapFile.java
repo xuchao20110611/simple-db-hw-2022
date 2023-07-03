@@ -177,6 +177,7 @@ public class HeapFile implements DbFile {
                 synchronized (next_page) {
                     ((HeapPage) next_page).deleteTuple(t);
                     modified_page_list.add(next_page);
+                    next_page.markDirty(true, tid);
                     return modified_page_list;
                 }
 
