@@ -44,7 +44,7 @@ public class HeapPageId implements PageId {
      * @see BufferPool
      */
     public int hashCode() {
-        return table_id_ * 997 + page_num_;
+        return table_id_ * 1025 + page_num_;
     }
 
     /**

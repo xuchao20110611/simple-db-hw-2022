@@ -33,6 +33,9 @@ public class HeapPage implements Page {
     byte[] oldData;
     private final Byte oldDataLock = (byte) 0;
 
+    private boolean is_dirty_;
+    private TransactionId dirty_tid_ = null;
+
     /**
      * Create a HeapPage from a set of bytes of data read from disk.
      * The format of a HeapPage is a set of header bytes indicating
@@ -262,8 +265,29 @@ public class HeapPage implements Page {
      *                     already empty.
      */
     public void deleteTuple(Tuple t) throws DbException {
-        // TODO: some code goes here
-        // not necessary for lab1
+        if (!t.getTupleDesc().equals(td)) {
+            throw new DbException("HeapPage::deleteTuple: tupleDesc is mismatch");
+        }
+        int potentinal_pos = 0;
+        for (; potentinal_pos < numSlots; potentinal_pos++) {
+            if (isSlotUsed(potentinal_pos)) {
+                int tuple_size = td.numFields();
+                int i = 0;
+                for (; i < tuple_size; i++) {
+                    if (!t.getField(i).equals(tuples[potentinal_pos].getField(i))) {
+                        break;
+                    }
+                }
+                if (i == tuple_size) {
+                    break;
+                }
+            }
+        }
+        if (potentinal_pos == numSlots) {
+            throw new DbException("deleteTuple: tuple is not on this page or already empty");
+        }
+        tuples[potentinal_pos] = null;
+        markSlotUsed(potentinal_pos, false);
     }
 
     /**
@@ -275,8 +299,26 @@ public class HeapPage implements Page {
      *                     is mismatch.
      */
     public void insertTuple(Tuple t) throws DbException {
-        // TODO: some code goes here
-        // not necessary for lab1
+
+        if (!t.getTupleDesc().equals(td)) {
+            throw new DbException("tupleDesc is mismatch");
+        }
+        int potentinal_pos = 0;
+        for (; potentinal_pos < numSlots; potentinal_pos++) {
+            if (isSlotUsed(potentinal_pos)) {
+                continue;
+            } else {
+                break;
+            }
+        }
+        if (potentinal_pos == numSlots) {
+            throw new DbException("page is full");
+        }
+        tuples[potentinal_pos] = t;
+        RecordId rid = new RecordId(pid, potentinal_pos);
+        t.setRecordId(rid);
+        markSlotUsed(potentinal_pos, true);
+
     }
 
     /**
@@ -284,8 +326,8 @@ public class HeapPage implements Page {
      * that did the dirtying
      */
     public void markDirty(boolean dirty, TransactionId tid) {
-        // TODO: some code goes here
-        // not necessary for lab1
+        is_dirty_ = dirty;
+        dirty_tid_ = tid;
     }
 
     /**
@@ -293,9 +335,11 @@ public class HeapPage implements Page {
      * the page is not dirty
      */
     public TransactionId isDirty() {
-        // TODO: some code goes here
-        // Not necessary for lab1
-        return null;
+        if (is_dirty_) {
+            return dirty_tid_;
+        } else {
+            return null;
+        }
     }
 
     /**
@@ -308,7 +352,7 @@ public class HeapPage implements Page {
             while (header_byte_int != 0) {
                 unused_slot_num += header_byte_int & 0x01;
                 header_byte_int >>= 1;
-                System.out.println(header_byte_int);
+                // System.out.println(header_byte_int);
             }
         }
         return numSlots - unused_slot_num;
@@ -329,8 +373,15 @@ public class HeapPage implements Page {
      * Abstraction to fill or clear a slot on this page.
      */
     private void markSlotUsed(int i, boolean value) {
-        // TODO: some code goes here
-        // not necessary for lab1
+
+        int byte_num = i / 8;
+        int byte_remain = i - 8 * byte_num;
+        int header_byte_int = value ? 1 : 0;
+        header_byte_int <<= byte_remain;
+        byte set_byte = (byte) (0xff - (1 << byte_remain));
+        byte header_byte = (byte) header_byte_int;
+        header[byte_num] = (byte) (header[byte_num] & set_byte);
+        header[byte_num] = (byte) (header[byte_num] | header_byte);
     }
 
     /**

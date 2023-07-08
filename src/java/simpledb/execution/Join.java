@@ -14,6 +14,11 @@ public class Join extends Operator {
 
     private static final long serialVersionUID = 1L;
 
+    private JoinPredicate p_;
+    private OpIterator child1_;
+    private OpIterator child2_;
+    private Tuple t1_;// store the current tuple of child1_
+
     /**
      * Constructor. Accepts two children to join and the predicate to join them
      * on
@@ -23,12 +28,14 @@ public class Join extends Operator {
      * @param child2 Iterator for the right(inner) relation to join
      */
     public Join(JoinPredicate p, OpIterator child1, OpIterator child2) {
-        // TODO: some code goes here
+        p_ = p;
+        child1_ = child1;
+        child2_ = child2;
+        t1_ = null;
     }
 
     public JoinPredicate getJoinPredicate() {
-        // TODO: some code goes here
-        return null;
+        return p_;
     }
 
     /**
@@ -36,7 +43,13 @@ public class Join extends Operator {
      *         alias or table name.
      */
     public String getJoinField1Name() {
-        // TODO: some code goes here
+
+        try {
+            return child1_.getTupleDesc().getFieldName(p_.getField1());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
         return null;
     }
 
@@ -45,30 +58,43 @@ public class Join extends Operator {
      *         alias or table name.
      */
     public String getJoinField2Name() {
-        // TODO: some code goes here
+        try {
+            return child2_.getTupleDesc().getFieldName(p_.getField2());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
         return null;
     }
 
     /**
      * @see TupleDesc#merge(TupleDesc, TupleDesc) for possible
-     *         implementation logic.
+     *      implementation logic.
      */
     public TupleDesc getTupleDesc() {
-        // TODO: some code goes here
-        return null;
+        return TupleDesc.merge(child1_.getTupleDesc(), child2_.getTupleDesc());
     }
 
     public void open() throws DbException, NoSuchElementException,
             TransactionAbortedException {
-        // TODO: some code goes here
+        super.open();
+        child1_.open();
+        child2_.open();
+        t1_ = null;
     }
 
     public void close() {
-        // TODO: some code goes here
+        super.close();
+        child1_.close();
+        child2_.close();
+        t1_ = null;
     }
 
     public void rewind() throws DbException, TransactionAbortedException {
-        // TODO: some code goes here
+        child1_.rewind();
+        child2_.rewind();
+        t1_ = null;
+
     }
 
     /**
@@ -90,19 +116,60 @@ public class Join extends Operator {
      * @see JoinPredicate#filter
      */
     protected Tuple fetchNext() throws TransactionAbortedException, DbException {
-        // TODO: some code goes here
+        if (t1_ == null) {
+            if (child1_.hasNext()) {
+                t1_ = child1_.next();
+            }
+        }
+        while (child2_.hasNext()) {
+            Tuple t2 = child2_.next();
+            if (p_.filter(t1_, t2)) {
+                Tuple new_tuple = new Tuple(TupleDesc.merge(t1_.getTupleDesc(), t2.getTupleDesc()));
+                int index = 0;
+                for (int i = 0; i < t1_.getTupleDesc().numFields(); i++) {
+                    new_tuple.setField(index++, t1_.getField(i));
+                }
+                for (int i = 0; i < t2.getTupleDesc().numFields(); i++) {
+                    new_tuple.setField(index++, t2.getField(i));
+                }
+                /* attention: no RecordId */
+                return new_tuple;
+            }
+        }
+
+        while (child1_.hasNext()) {
+            t1_ = child1_.next();
+            child2_.rewind();
+            while (child2_.hasNext()) {
+                Tuple t2 = child2_.next();
+                if (p_.filter(t1_, t2)) {
+                    Tuple new_tuple = new Tuple(TupleDesc.merge(t1_.getTupleDesc(), t2.getTupleDesc()));
+                    int index = 0;
+                    for (int i = 0; i < t1_.getTupleDesc().numFields(); i++) {
+                        new_tuple.setField(index++, t1_.getField(i));
+                    }
+                    for (int i = 0; i < t2.getTupleDesc().numFields(); i++) {
+                        new_tuple.setField(index++, t2.getField(i));
+                    }
+                    /* attention: no RecordId */
+                    return new_tuple;
+                }
+            }
+
+        }
+
         return null;
     }
 
     @Override
     public OpIterator[] getChildren() {
-        // TODO: some code goes here
-        return null;
+        return new OpIterator[] { child1_, child2_ };
     }
 
     @Override
     public void setChildren(OpIterator[] children) {
-        // TODO: some code goes here
+        child1_ = children[0];
+        child2_ = children[1];
     }
 
 }
