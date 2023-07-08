@@ -133,7 +133,8 @@ public class HeapFile implements DbFile {
         int pageid_pos = 0;
         for (; pageid_pos < page_num_; pageid_pos++) {
             PageId next_pageid = new HeapPageId(getId(), pageid_pos);
-            Page next_page = Database.getBufferPool().getPage(tid, next_pageid, Permissions.READ_WRITE);
+            Page next_page = Database.getBufferPool().getPage(tid, next_pageid, Permissions.READ_WRITE); // correctly
+                                                                                                         // evict pages
             try {
                 synchronized (next_page) {
                     ((HeapPage) next_page).insertTuple(t);
@@ -148,7 +149,8 @@ public class HeapFile implements DbFile {
         if (pageid_pos == page_num_) {
             page_num_++;
             PageId next_pageid = new HeapPageId(getId(), pageid_pos);
-            Page next_page = Database.getBufferPool().getPage(tid, next_pageid, Permissions.READ_WRITE);
+            Page next_page = Database.getBufferPool().getPage(tid, next_pageid, Permissions.READ_WRITE); // correctly
+                                                                                                         // evict pages
             try {
                 synchronized (next_page) {
                     ((HeapPage) next_page).insertTuple(t);
