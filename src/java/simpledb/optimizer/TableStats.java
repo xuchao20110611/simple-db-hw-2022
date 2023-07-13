@@ -186,8 +186,7 @@ public class TableStats {
      *         selectivityFactor
      */
     public int estimateTableCardinality(double selectivityFactor) {
-        // TODO: some code goes here
-        return 0;
+        return (int) (tuple_num_ * selectivityFactor);
     }
 
     /**
