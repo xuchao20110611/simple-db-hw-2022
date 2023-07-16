@@ -257,10 +257,49 @@ public class JoinOptimizer {
             Map<String, TableStats> stats,
             Map<String, Double> filterSelectivities, boolean explain)
             throws ParsingException {
-        // Not necessary for labs 1 and 2.
+        PlanCache bestPlan = new PlanCache();
+        bestPlan.addPlan(new HashSet<>(), Integer.MAX_VALUE, 0, new ArrayList<>());
+        for (int i = 1; i <= joins.size(); i++) {
 
-        // TODO: some code goes here
-        return joins;
+            Set<Set<LogicalJoinNode>> s_set = enumerateSubsets(joins, i);
+
+            for (Set<LogicalJoinNode> s : s_set) {
+
+                List<LogicalJoinNode> s_list = new ArrayList<>(s);
+                // Set<Set<LogicalJoinNode>> sdot_set = enumerateSubsets(s_list, d - 1);
+                CostCard cost_card = null;
+                double currentbest = Double.MAX_VALUE;
+                if (bestPlan.getOrder(s) != null) {
+                    currentbest = bestPlan.getCost(s);
+                }
+                for (LogicalJoinNode j : s_list) {
+                    CostCard cost_card_buf = computeCostAndCardOfSubplan(stats, filterSelectivities, j, s, currentbest,
+                            bestPlan);
+                    if (cost_card_buf == null) {
+                        continue;
+                    }
+                    currentbest = Math.min(currentbest, cost_card_buf.cost);
+                    if (cost_card == null) {
+                        cost_card = cost_card_buf;
+                    } else if (cost_card_buf.cost < cost_card.cost) {
+                        cost_card = cost_card_buf;
+                    }
+                }
+
+                if (cost_card != null) {
+                    bestPlan.addPlan(s, cost_card.cost, cost_card.card, cost_card.plan);
+                }
+            }
+        }
+
+        Set<LogicalJoinNode> joins_set = new HashSet<>(joins);
+
+        if (explain) {
+            printJoins(bestPlan.getOrder(joins_set), bestPlan, stats, filterSelectivities);
+        }
+
+        return bestPlan.getOrder(joins_set);
+
     }
 
     // ===================== Private Methods =================================
