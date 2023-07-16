@@ -6,7 +6,9 @@ import simpledb.execution.Predicate;
 import simpledb.execution.SeqScan;
 import simpledb.storage.*;
 import simpledb.transaction.Transaction;
+import simpledb.transaction.TransactionId;
 
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -66,12 +68,19 @@ public class TableStats {
      */
     static final int NUM_HIST_BINS = 100;
 
+    private int tableid_;
+    private int ioCostPerPage_;
+    private int tuple_num_;
+    HeapFile file_;
+    ArrayList<Object> histograms_;
+
     /**
      * Create a new TableStats object, that keeps track of statistics on each
      * column of a table
      *
      * @param tableid       The table over which to compute statistics
-     * @param ioCostPerPage The cost per page of IO. This doesn't differentiate between
+     * @param ioCostPerPage The cost per page of IO. This doesn't differentiate
+     *                      between
      *                      sequential-scan IO and disk seeks.
      */
     public TableStats(int tableid, int ioCostPerPage) {
@@ -82,7 +91,74 @@ public class TableStats {
         // You should try to do this reasonably efficiently, but you don't
         // necessarily have to (for example) do everything
         // in a single scan of the table.
-        // TODO: some code goes here
+        tableid_ = tableid;
+        file_ = (HeapFile) Database.getCatalog().getDatabaseFile(tableid_);
+        ioCostPerPage_ = ioCostPerPage;
+
+        TransactionId initiate_tid = new TransactionId();
+        DbFileIterator ite = file_.iterator(initiate_tid);
+
+        try {
+            ite.open();
+            int[] maxnums = null;
+            int[] minnums = null;
+            int num_fields = 0;
+            Tuple first_tuple = null;
+            ArrayList<Object> values = new ArrayList<>();
+            if (ite.hasNext()) {
+                first_tuple = ite.next();
+                num_fields = first_tuple.getTupleDesc().numFields();
+                histograms_ = new ArrayList<>(num_fields);
+                maxnums = new int[num_fields];
+                minnums = new int[num_fields];
+                tuple_num_++;
+                for (int i = 0; i < num_fields; i++) {
+                    if (first_tuple.getField(i).getType() == Type.INT_TYPE) {
+                        maxnums[i] = ((IntField) first_tuple.getField(i)).getValue();
+                        minnums[i] = ((IntField) first_tuple.getField(i)).getValue();
+                        ArrayList<Integer> value_ele = new ArrayList<>();
+                        value_ele.add(((IntField) first_tuple.getField(i)).getValue());
+                        values.add(value_ele);
+                    } else {
+                        ArrayList<String> value_ele = new ArrayList<>();
+                        value_ele.add(((StringField) first_tuple.getField(i)).getValue());
+                        values.add(value_ele);
+                    }
+                }
+            }
+            while (ite.hasNext()) {
+                Tuple tuple = ite.next();
+                tuple_num_++;
+                for (int i = 0; i < num_fields; i++) {
+                    if (tuple.getField(i).getType() == Type.INT_TYPE) {
+                        maxnums[i] = Math.max(maxnums[i], ((IntField) tuple.getField(i)).getValue());
+                        minnums[i] = Math.min(minnums[i], ((IntField) tuple.getField(i)).getValue());
+                        ((ArrayList<Integer>) values.get(i)).add(((IntField) tuple.getField(i)).getValue());
+                    } else {
+                        ((ArrayList<String>) values.get(i)).add(((StringField) tuple.getField(i)).getValue());
+                    }
+                }
+            }
+            for (int i = 0; i < num_fields; i++) {
+                if (first_tuple.getField(i).getType() == Type.INT_TYPE) {
+                    IntHistogram new_hist = new IntHistogram(NUM_HIST_BINS, minnums[i], maxnums[i]);
+                    for (int j = 0; j < ((ArrayList<Integer>) values.get(i)).size(); j++) {
+                        new_hist.addValue(((ArrayList<Integer>) values.get(i)).get(j));
+                    }
+                    histograms_.add(new_hist);
+                } else {
+                    StringHistogram new_hist = new StringHistogram(NUM_HIST_BINS);
+                    for (int j = 0; j < ((ArrayList<String>) values.get(i)).size(); j++) {
+                        new_hist.addValue(((ArrayList<String>) values.get(i)).get(j));
+                    }
+                    histograms_.add(new_hist);
+                }
+            }
+            ite.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
     }
 
     /**
@@ -98,8 +174,7 @@ public class TableStats {
      * @return The estimated cost of scanning the table.
      */
     public double estimateScanCost() {
-        // TODO: some code goes here
-        return 0;
+        return file_.numPages() * ioCostPerPage_;
     }
 
     /**
@@ -111,8 +186,7 @@ public class TableStats {
      *         selectivityFactor
      */
     public int estimateTableCardinality(double selectivityFactor) {
-        // TODO: some code goes here
-        return 0;
+        return (int) (tuple_num_ * selectivityFactor);
     }
 
     /**
@@ -120,13 +194,21 @@ public class TableStats {
      *
      * @param field the index of the field
      * @param op    the operator in the predicate
-     *              The semantic of the method is that, given the table, and then given a
-     *              tuple, of which we do not know the value of the field, return the
-     *              expected selectivity. You may estimate this value from the histograms.
+     *              The semantic of the method is that, given the table, and then
+     *              given a
+     *              tuple, of which we do not know the value of the field, return
+     *              the
+     *              expected selectivity. You may estimate this value from the
+     *              histograms.
      */
     public double avgSelectivity(int field, Predicate.Op op) {
-        // TODO: some code goes here
-        return 1.0;
+        if (histograms_.get(field) instanceof IntHistogram) {
+            IntHistogram intHistogram = (IntHistogram) histograms_.get(field);
+            return intHistogram.avgSelectivity();
+        } else {
+            StringHistogram stringHistogram = (StringHistogram) histograms_.get(field);
+            return stringHistogram.avgSelectivity();
+        }
     }
 
     /**
@@ -140,7 +222,14 @@ public class TableStats {
      *         predicate
      */
     public double estimateSelectivity(int field, Predicate.Op op, Field constant) {
-        // TODO: some code goes here
+        switch (constant.getType()) {
+            case INT_TYPE:
+                IntHistogram intHistogram = (IntHistogram) histograms_.get(field);
+                return intHistogram.estimateSelectivity(op, ((IntField) constant).getValue());
+            case STRING_TYPE:
+                StringHistogram stringHistogram = (StringHistogram) histograms_.get(field);
+                return stringHistogram.estimateSelectivity(op, ((StringField) constant).getValue());
+        }
         return 1.0;
     }
 
@@ -148,8 +237,7 @@ public class TableStats {
      * return the total number of tuples in this table
      */
     public int totalTuples() {
-        // TODO: some code goes here
-        return 0;
+        return tuple_num_;
     }
 
 }
