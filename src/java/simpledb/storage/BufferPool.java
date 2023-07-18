@@ -46,9 +46,13 @@ public class BufferPool {
     private ConcurrentHashMap<PageId, Page> pid_to_pages_ = new ConcurrentHashMap<PageId, Page>();
     // private ConcurrentHashMap<Integer, TransactionId> pid_to_tid_ = new
     // ConcurrentHashMap<Integer, TransactionId>();
-    private ConcurrentHashMap<TransactionId, Permissions> tid_to_permission_ = new ConcurrentHashMap<TransactionId, Permissions>();
-    private ConcurrentHashMap<TransactionId, Set<PageId>> tid_to_pids_ = new ConcurrentHashMap<TransactionId, Set<PageId>>();
+    // private ConcurrentHashMap<TransactionId, Permissions> tid_to_permission_ =
+    // new ConcurrentHashMap<TransactionId, Permissions>();
+    // private ConcurrentHashMap<TransactionId, Set<PageId>> tid_to_pids_ = new
+    // ConcurrentHashMap<TransactionId, Set<PageId>>();
     private ConcurrentHashMap<PageId, ReadWriteLock> pid_to_lock_ = new ConcurrentHashMap<PageId, ReadWriteLock>();
+    private ConcurrentHashMap<TransactionId, Set<PageId>> tid_to_pids_rw_ = new ConcurrentHashMap<TransactionId, Set<PageId>>();
+    private ConcurrentHashMap<TransactionId, Set<PageId>> tid_to_pids_ro_ = new ConcurrentHashMap<TransactionId, Set<PageId>>();
 
     /**
      * Creates a BufferPool that caches up to numPages pages.
@@ -90,24 +94,41 @@ public class BufferPool {
      */
     public Page getPage(TransactionId tid, PageId pid, Permissions perm)
             throws TransactionAbortedException, DbException {
-        tid_to_permission_.put(tid, perm);
+
+        // tid_to_permission_.put(tid, perm);
         synchronized (pid_to_lock_) {
             if (pid_to_lock_.get(pid) == null) {
                 pid_to_lock_.put(pid, new ReentrantReadWriteLock());
             }
         }
         if (perm.equals(Permissions.READ_ONLY)) {
+            if (tid_to_pids_rw_.get(tid) != null && tid_to_pids_rw_.get(tid).contains(pid)) {
+                tid_to_pids_rw_.get(tid).remove(pid);
+                pid_to_lock_.get(pid).writeLock().unlock();
+            }
             pid_to_lock_.get(pid).readLock().lock();
+
+            tid_to_pids_ro_.putIfAbsent(tid, new HashSet<PageId>());
+            tid_to_pids_ro_.get(tid).add(pid);
+
         } else {
+            if (tid_to_pids_ro_.get(tid) != null && tid_to_pids_ro_.get(tid).contains(pid)) {
+                tid_to_pids_ro_.get(tid).remove(pid);
+                pid_to_lock_.get(pid).readLock().unlock();
+            }
             pid_to_lock_.get(pid).writeLock().lock();
+
+            tid_to_pids_rw_.putIfAbsent(tid, new HashSet<PageId>());
+            tid_to_pids_rw_.get(tid).add(pid);
+
         }
 
         if (pid_to_pages_.size() == num_pages_ && pid_to_pages_.get(pid) == null) {
             evictPage();
         }
 
-        tid_to_pids_.putIfAbsent(tid, new HashSet<PageId>());
-        tid_to_pids_.get(tid).add(pid);
+        // tid_to_pids_.putIfAbsent(tid, new HashSet<PageId>());
+        // tid_to_pids_.get(tid).add(pid);
         DbFile dbfile = Database.getCatalog().getDatabaseFile(pid.getTableId());
         if (pid_to_pages_.get(pid) == null) {
             pid_to_pages_.put(pid, dbfile.readPage(pid));
@@ -126,13 +147,17 @@ public class BufferPool {
      * @param pid the ID of the page to unlock
      */
     public void unsafeReleasePage(TransactionId tid, PageId pid) {
-        tid_to_pids_.get(tid).remove(pid);
 
-        if (tid_to_permission_.get(tid).equals(Permissions.READ_ONLY)) {
+        if (tid_to_pids_ro_.get(tid) != null && tid_to_pids_ro_.get(tid).contains(pid)) {
+            tid_to_pids_ro_.get(tid).remove(pid);
             pid_to_lock_.get(pid).readLock().unlock();
-        } else {
+        }
+
+        if (tid_to_pids_rw_.get(tid) != null && tid_to_pids_rw_.get(tid).contains(pid)) {
+            tid_to_pids_rw_.get(tid).remove(pid);
             pid_to_lock_.get(pid).writeLock().unlock();
         }
+
     }
 
     /**
@@ -150,10 +175,15 @@ public class BufferPool {
      */
     public boolean holdsLock(TransactionId tid, PageId p) {
 
-        if (tid_to_pids_.get(tid) == null) {
-            return false;
+        if (tid_to_pids_ro_.get(tid) != null && tid_to_pids_ro_.get(tid).contains(p)) {
+            return true;
         }
-        return tid_to_pids_.get(tid).contains(p);
+
+        if (tid_to_pids_rw_.get(tid) != null && tid_to_pids_rw_.get(tid).contains(p)) {
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -188,13 +218,13 @@ public class BufferPool {
 
         // int page_num = 0;
         // boolean is_insert = false;
-        tid_to_permission_.put(tid, Permissions.READ_WRITE);
+
         List<Page> modified_page = Database.getCatalog().getDatabaseFile(tableId).insertTuple(tid, t);
         for (Page page : modified_page) {
             page.markDirty(true, tid);
             pid_to_pages_.put(page.getId(), page);
-            tid_to_pids_.putIfAbsent(tid, new HashSet<PageId>());
-            tid_to_pids_.get(tid).add(page.getId());
+            tid_to_pids_rw_.putIfAbsent(tid, new HashSet<PageId>());
+            tid_to_pids_rw_.get(tid).add(page.getId());
         }
         // while (!is_insert) {
         // PageId pid = new HeapPageId(tableId, page_num);
@@ -241,14 +271,13 @@ public class BufferPool {
             throws DbException, IOException, TransactionAbortedException {
         // int page_num = 0;
         // boolean is_delete = false;
-        tid_to_permission_.put(tid, Permissions.READ_WRITE);
         int tableId = t.getRecordId().getPageId().getTableId();
         List<Page> modified_page = Database.getCatalog().getDatabaseFile(tableId).deleteTuple(tid, t);
         for (Page page : modified_page) {
             page.markDirty(true, tid);
             pid_to_pages_.put(page.getId(), page);
-            tid_to_pids_.putIfAbsent(tid, new HashSet<PageId>());
-            tid_to_pids_.get(tid).add(page.getId());
+            tid_to_pids_rw_.putIfAbsent(tid, new HashSet<PageId>());
+            tid_to_pids_rw_.get(tid).add(page.getId());
         }
         // while (!is_delete) {
         // PageId pid = new HeapPageId(t.getRecordId().getPageId().getTableId(),
@@ -318,7 +347,10 @@ public class BufferPool {
      * Write all pages of the specified transaction to disk.
      */
     public synchronized void flushPages(TransactionId tid) throws IOException {
-        for (PageId pid : tid_to_pids_.get(tid)) {
+        for (PageId pid : tid_to_pids_rw_.get(tid)) {
+            flushPage(pid);
+        }
+        for (PageId pid : tid_to_pids_ro_.get(tid)) {
             flushPage(pid);
         }
     }
