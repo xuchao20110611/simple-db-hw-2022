@@ -43,12 +43,12 @@ public class BufferPool {
 
     private int num_pages_ = 0;
 
-    private ConcurrentHashMap<Integer, Page> pid_to_pages_ = new ConcurrentHashMap<Integer, Page>();
+    private ConcurrentHashMap<PageId, Page> pid_to_pages_ = new ConcurrentHashMap<PageId, Page>();
     // private ConcurrentHashMap<Integer, TransactionId> pid_to_tid_ = new
     // ConcurrentHashMap<Integer, TransactionId>();
     private ConcurrentHashMap<TransactionId, Permissions> tid_to_permission_ = new ConcurrentHashMap<TransactionId, Permissions>();
-    private ConcurrentHashMap<TransactionId, Set<Integer>> tid_to_pids_ = new ConcurrentHashMap<TransactionId, Set<Integer>>();
-    private ConcurrentHashMap<Integer, ReadWriteLock> pid_to_lock_ = new ConcurrentHashMap<Integer, ReadWriteLock>();
+    private ConcurrentHashMap<TransactionId, Set<PageId>> tid_to_pids_ = new ConcurrentHashMap<TransactionId, Set<PageId>>();
+    private ConcurrentHashMap<PageId, ReadWriteLock> pid_to_lock_ = new ConcurrentHashMap<PageId, ReadWriteLock>();
 
     /**
      * Creates a BufferPool that caches up to numPages pages.
@@ -92,31 +92,28 @@ public class BufferPool {
             throws TransactionAbortedException, DbException {
         tid_to_permission_.put(tid, perm);
         synchronized (pid_to_lock_) {
-            if (pid_to_lock_.get(pid.hashCode()) == null) {
-                pid_to_lock_.put(pid.hashCode(), new ReentrantReadWriteLock());
+            if (pid_to_lock_.get(pid) == null) {
+                pid_to_lock_.put(pid, new ReentrantReadWriteLock());
             }
         }
         if (perm.equals(Permissions.READ_ONLY)) {
-            pid_to_lock_.get(pid.hashCode()).readLock().lock();
+            pid_to_lock_.get(pid).readLock().lock();
         } else {
-            pid_to_lock_.get(pid.hashCode()).writeLock().lock();
+            pid_to_lock_.get(pid).writeLock().lock();
         }
 
-        if (pid_to_pages_.size() == num_pages_ && pid_to_pages_.get(pid.getPageNumber()) == null) {
+        if (pid_to_pages_.size() == num_pages_ && pid_to_pages_.get(pid) == null) {
             evictPage();
         }
-        // int table_page_id = pid.getTableId() * 1025 + pid.getPageNumber();
-        int table_page_id = pid.hashCode();
 
-        // pid_to_tid_.put(table_page_id, tid);
-        tid_to_pids_.putIfAbsent(tid, new HashSet<Integer>());
-        tid_to_pids_.get(tid).add(table_page_id);
+        tid_to_pids_.putIfAbsent(tid, new HashSet<PageId>());
+        tid_to_pids_.get(tid).add(pid);
         DbFile dbfile = Database.getCatalog().getDatabaseFile(pid.getTableId());
-        if (pid_to_pages_.get(table_page_id) == null) {
-            pid_to_pages_.put(table_page_id, dbfile.readPage(pid));
+        if (pid_to_pages_.get(pid) == null) {
+            pid_to_pages_.put(pid, dbfile.readPage(pid));
         }
 
-        return pid_to_pages_.get(table_page_id);
+        return pid_to_pages_.get(pid);
     }
 
     /**
@@ -129,12 +126,12 @@ public class BufferPool {
      * @param pid the ID of the page to unlock
      */
     public void unsafeReleasePage(TransactionId tid, PageId pid) {
-        tid_to_pids_.get(tid).remove(pid.hashCode());
+        tid_to_pids_.get(tid).remove(pid);
 
         if (tid_to_permission_.get(tid).equals(Permissions.READ_ONLY)) {
-            pid_to_lock_.get(pid.hashCode()).readLock().unlock();
+            pid_to_lock_.get(pid).readLock().unlock();
         } else {
-            pid_to_lock_.get(pid.hashCode()).writeLock().unlock();
+            pid_to_lock_.get(pid).writeLock().unlock();
         }
     }
 
@@ -156,7 +153,7 @@ public class BufferPool {
         if (tid_to_pids_.get(tid) == null) {
             return false;
         }
-        return tid_to_pids_.get(tid).contains(p.hashCode());
+        return tid_to_pids_.get(tid).contains(p);
     }
 
     /**
@@ -195,11 +192,9 @@ public class BufferPool {
         List<Page> modified_page = Database.getCatalog().getDatabaseFile(tableId).insertTuple(tid, t);
         for (Page page : modified_page) {
             page.markDirty(true, tid);
-            // int page_num = page.getId().getPageNumber();
-            pid_to_pages_.put(page.hashCode(), page);
-            // pid_to_tid_.put(page.hashCode(), tid);
-            tid_to_pids_.putIfAbsent(tid, new HashSet<Integer>());
-            tid_to_pids_.get(tid).add(page.hashCode());
+            pid_to_pages_.put(page.getId(), page);
+            tid_to_pids_.putIfAbsent(tid, new HashSet<PageId>());
+            tid_to_pids_.get(tid).add(page.getId());
         }
         // while (!is_insert) {
         // PageId pid = new HeapPageId(tableId, page_num);
@@ -251,9 +246,9 @@ public class BufferPool {
         List<Page> modified_page = Database.getCatalog().getDatabaseFile(tableId).deleteTuple(tid, t);
         for (Page page : modified_page) {
             page.markDirty(true, tid);
-            pid_to_pages_.put(page.hashCode(), page);
-            tid_to_pids_.putIfAbsent(tid, new HashSet<Integer>());
-            tid_to_pids_.get(tid).add(page.hashCode());
+            pid_to_pages_.put(page.getId(), page);
+            tid_to_pids_.putIfAbsent(tid, new HashSet<PageId>());
+            tid_to_pids_.get(tid).add(page.getId());
         }
         // while (!is_delete) {
         // PageId pid = new HeapPageId(t.getRecordId().getPageId().getTableId(),
@@ -282,9 +277,9 @@ public class BufferPool {
      * break simpledb if running in NO STEAL mode.
      */
     public synchronized void flushAllPages() throws IOException {
-        for (int pid : pid_to_pages_.keySet()) {
-            HeapPageId heap_page_id = new HeapPageId(pid / 1025, pid % 1025);
-            flushPage(heap_page_id);
+        for (PageId pid : pid_to_pages_.keySet()) {
+
+            flushPage(pid);
         }
     }
 
@@ -298,7 +293,7 @@ public class BufferPool {
      * are removed from the cache so they can be reused safely
      */
     public synchronized void removePage(PageId pid) {
-        pid_to_pages_.remove(pid.hashCode());
+        pid_to_pages_.remove(pid);
         // pid_to_tid_.remove(pid.hashCode()); // question
     }
 
@@ -308,8 +303,8 @@ public class BufferPool {
      * @param pid an ID indicating the page to flush
      */
     private synchronized void flushPage(PageId pid) throws IOException {
-        int table_page_id = pid.hashCode();
-        Page page = pid_to_pages_.get(table_page_id);
+
+        Page page = pid_to_pages_.get(pid);
         if (page == null)
             return;
         if (page.isDirty() != null) {
@@ -323,13 +318,8 @@ public class BufferPool {
      * Write all pages of the specified transaction to disk.
      */
     public synchronized void flushPages(TransactionId tid) throws IOException {
-        // for (int pid : pid_to_pages_.keySet()) {
-        // if (pid_to_tid_.get(pid).equals(tid)) {
-        // flushPage(pid_to_pages_.get(pid).getId());
-        // }
-        // }
-        for (int pid : tid_to_pids_.get(tid)) {
-            flushPage(pid_to_pages_.get(pid).getId());
+        for (PageId pid : tid_to_pids_.get(tid)) {
+            flushPage(pid);
         }
     }
 
@@ -339,13 +329,13 @@ public class BufferPool {
      */
     private synchronized void evictPage() throws DbException {
         // discard one page randomly
-        Integer[] keys = pid_to_pages_.keySet().toArray(new Integer[0]);
+        PageId[] keys = pid_to_pages_.keySet().toArray(new PageId[0]);
         Random random = new Random();
 
         while (true) {
-            Integer random_key = keys[random.nextInt(keys.length)];
+            PageId random_key = keys[random.nextInt(keys.length)];
             try {
-                flushPage(pid_to_pages_.get(random_key).getId());
+                flushPage(random_key);
                 pid_to_pages_.remove(random_key);
                 // pid_to_tid_.remove(random_key);
                 break;
