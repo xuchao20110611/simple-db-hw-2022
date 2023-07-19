@@ -144,13 +144,14 @@ public class BufferPool {
                 tid_to_pids_ro_.get(tid).add(pid);
 
             } else {
+                if (lock.getWriteLock() != null && !lock.getWriteLock().equals(tid)) {
+                    throw new DbException("BufferPool::getPage: can not add a write lock when there is a write lock");
+                }
                 if (tid_to_pids_ro_.get(tid) != null && tid_to_pids_ro_.get(tid).contains(pid)) {
                     tid_to_pids_ro_.get(tid).remove(pid);
                     lock.removeReadLock(tid);
                 }
-                if (lock.getWriteLock() != null && !lock.getWriteLock().equals(tid)) {
-                    throw new DbException("BufferPool::getPage: can not add a write lock when there is a write lock");
-                }
+                
                 if (lock.getReadLock().size() > 0) {
                     throw new DbException("BufferPool::getPage: can not add a write lock when there are read locks");
                 }
@@ -218,8 +219,7 @@ public class BufferPool {
      * @param tid the ID of the transaction requesting the unlock
      */
     public void transactionComplete(TransactionId tid) {
-        // TODO: some code goes here
-        // not necessary for lab1|lab2
+        transactionComplete(tid, true);
     }
 
     /**
