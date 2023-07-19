@@ -44,15 +44,42 @@ public class BufferPool {
     private int num_pages_ = 0;
 
     private ConcurrentHashMap<PageId, Page> pid_to_pages_ = new ConcurrentHashMap<PageId, Page>();
-    // private ConcurrentHashMap<Integer, TransactionId> pid_to_tid_ = new
-    // ConcurrentHashMap<Integer, TransactionId>();
-    // private ConcurrentHashMap<TransactionId, Permissions> tid_to_permission_ =
-    // new ConcurrentHashMap<TransactionId, Permissions>();
-    // private ConcurrentHashMap<TransactionId, Set<PageId>> tid_to_pids_ = new
-    // ConcurrentHashMap<TransactionId, Set<PageId>>();
-    private ConcurrentHashMap<PageId, ReadWriteLock> pid_to_lock_ = new ConcurrentHashMap<PageId, ReadWriteLock>();
+
     private ConcurrentHashMap<TransactionId, Set<PageId>> tid_to_pids_rw_ = new ConcurrentHashMap<TransactionId, Set<PageId>>();
     private ConcurrentHashMap<TransactionId, Set<PageId>> tid_to_pids_ro_ = new ConcurrentHashMap<TransactionId, Set<PageId>>();
+    private ConcurrentHashMap<PageId, C_Lock> pid_to_lock_ = new ConcurrentHashMap<PageId, C_Lock>();
+
+    private class C_Lock {
+        private Set<TransactionId> read_lock_ = new HashSet<TransactionId>();
+        private TransactionId write_lock_ = null;
+
+        public C_Lock() {
+        }
+
+        public Set<TransactionId> getReadLock() {
+            return read_lock_;
+        }
+
+        public void addReadLock(TransactionId tid) {
+            read_lock_.add(tid);
+        }
+
+        public void removeReadLock(TransactionId tid) {
+            read_lock_.remove(tid);
+        }
+
+        public TransactionId getWriteLock() {
+            return write_lock_;
+        }
+
+        public void removeWriteLock() {
+            write_lock_ = null;
+        }
+
+        public void setWriteLock(TransactionId tid) {
+            write_lock_ = tid;
+        }
+    }
 
     /**
      * Creates a BufferPool that caches up to numPages pages.
@@ -98,29 +125,41 @@ public class BufferPool {
         // tid_to_permission_.put(tid, perm);
         synchronized (pid_to_lock_) {
             if (pid_to_lock_.get(pid) == null) {
-                pid_to_lock_.put(pid, new ReentrantReadWriteLock());
+                pid_to_lock_.put(pid, new C_Lock());
             }
         }
-        if (perm.equals(Permissions.READ_ONLY)) {
-            if (tid_to_pids_rw_.get(tid) != null && tid_to_pids_rw_.get(tid).contains(pid)) {
-                tid_to_pids_rw_.get(tid).remove(pid);
-                pid_to_lock_.get(pid).writeLock().unlock();
+        C_Lock lock = pid_to_lock_.get(pid);
+        synchronized (lock) {
+            if (perm.equals(Permissions.READ_ONLY)) {
+                if (tid_to_pids_rw_.get(tid) != null && tid_to_pids_rw_.get(tid).contains(pid)) {
+                    tid_to_pids_rw_.get(tid).remove(pid);
+                    lock.removeWriteLock();
+                }
+                if (lock.getWriteLock() != null && !lock.getWriteLock().equals(tid)) {
+                    throw new DbException("BufferPool::getPage: can not add a radlock when there is a write lock");
+                }
+                lock.addReadLock(tid);
+
+                tid_to_pids_ro_.putIfAbsent(tid, new HashSet<PageId>());
+                tid_to_pids_ro_.get(tid).add(pid);
+
+            } else {
+                if (tid_to_pids_ro_.get(tid) != null && tid_to_pids_ro_.get(tid).contains(pid)) {
+                    tid_to_pids_ro_.get(tid).remove(pid);
+                    lock.removeReadLock(tid);
+                }
+                if (lock.getWriteLock() != null && !lock.getWriteLock().equals(tid)) {
+                    throw new DbException("BufferPool::getPage: can not add a write lock when there is a write lock");
+                }
+                if (lock.getReadLock().size() > 0) {
+                    throw new DbException("BufferPool::getPage: can not add a write lock when there are read locks");
+                }
+                lock.setWriteLock(tid);
+
+                tid_to_pids_rw_.putIfAbsent(tid, new HashSet<PageId>());
+                tid_to_pids_rw_.get(tid).add(pid);
+
             }
-            pid_to_lock_.get(pid).readLock().lock();
-
-            tid_to_pids_ro_.putIfAbsent(tid, new HashSet<PageId>());
-            tid_to_pids_ro_.get(tid).add(pid);
-
-        } else {
-            if (tid_to_pids_ro_.get(tid) != null && tid_to_pids_ro_.get(tid).contains(pid)) {
-                tid_to_pids_ro_.get(tid).remove(pid);
-                pid_to_lock_.get(pid).readLock().unlock();
-            }
-            pid_to_lock_.get(pid).writeLock().lock();
-
-            tid_to_pids_rw_.putIfAbsent(tid, new HashSet<PageId>());
-            tid_to_pids_rw_.get(tid).add(pid);
-
         }
 
         if (pid_to_pages_.size() == num_pages_ && pid_to_pages_.get(pid) == null) {
@@ -148,15 +187,28 @@ public class BufferPool {
      */
     public void unsafeReleasePage(TransactionId tid, PageId pid) {
 
-        if (tid_to_pids_ro_.get(tid) != null && tid_to_pids_ro_.get(tid).contains(pid)) {
-            tid_to_pids_ro_.get(tid).remove(pid);
-            pid_to_lock_.get(pid).readLock().unlock();
+        C_Lock lock = pid_to_lock_.get(pid);
+        synchronized (lock) {
+            if (lock.getReadLock().contains(tid)) {
+                lock.removeReadLock(tid);
+                tid_to_pids_ro_.get(tid).remove(pid);
+            }
+            if (lock.getWriteLock() != null && lock.getWriteLock().equals(tid)) {
+                lock.removeWriteLock();
+                tid_to_pids_rw_.get(tid).remove(pid);
+            }
         }
+        // if (tid_to_pids_ro_.get(tid) != null &&
+        // tid_to_pids_ro_.get(tid).contains(pid)) {
+        // tid_to_pids_ro_.get(tid).remove(pid);
+        // pid_to_lock_.get(pid).readLock().unlock();
+        // }
 
-        if (tid_to_pids_rw_.get(tid) != null && tid_to_pids_rw_.get(tid).contains(pid)) {
-            tid_to_pids_rw_.get(tid).remove(pid);
-            pid_to_lock_.get(pid).writeLock().unlock();
-        }
+        // if (tid_to_pids_rw_.get(tid) != null &&
+        // tid_to_pids_rw_.get(tid).contains(pid)) {
+        // tid_to_pids_rw_.get(tid).remove(pid);
+        // pid_to_lock_.get(pid).writeLock().unlock();
+        // }
 
     }
 
@@ -223,35 +275,10 @@ public class BufferPool {
         for (Page page : modified_page) {
             page.markDirty(true, tid);
             pid_to_pages_.put(page.getId(), page);
-            tid_to_pids_rw_.putIfAbsent(tid, new HashSet<PageId>());
-            tid_to_pids_rw_.get(tid).add(page.getId());
+            // tid_to_pids_rw_.putIfAbsent(tid, new HashSet<PageId>());
+            // tid_to_pids_rw_.get(tid).add(page.getId());
         }
-        // while (!is_insert) {
-        // PageId pid = new HeapPageId(tableId, page_num);
-        // Page page = getPage(tid, pid, Permissions.READ_WRITE);
 
-        // page.markDirty(true, tid);
-        // try {
-        // synchronized (page) {
-        // ((HeapPage) page).insertTuple(t);
-        // is_insert = true;
-        // }
-
-        // } catch (DbException e) {
-        // page_num++;
-        // }
-
-        // }
-        // if (!is_insert) {
-        // // make a new page
-        // HeapPageId pid = new HeapPageId(tableId, page_num);
-        // HeapPage page = new HeapPage(pid, HeapPage.createEmptyPageData());
-        // int table_page_id = pid.hashCode();
-        // // unimplemented: eviction rules
-        // pid_to_pages_.put(table_page_id, page);
-        // pid_to_tid_.put(table_page_id, tid);
-        // page.insertTuple(t);
-        // }
     }
 
     /**
@@ -276,28 +303,10 @@ public class BufferPool {
         for (Page page : modified_page) {
             page.markDirty(true, tid);
             pid_to_pages_.put(page.getId(), page);
-            tid_to_pids_rw_.putIfAbsent(tid, new HashSet<PageId>());
-            tid_to_pids_rw_.get(tid).add(page.getId());
+            // tid_to_pids_rw_.putIfAbsent(tid, new HashSet<PageId>());
+            // tid_to_pids_rw_.get(tid).add(page.getId());
         }
-        // while (!is_delete) {
-        // PageId pid = new HeapPageId(t.getRecordId().getPageId().getTableId(),
-        // page_num);
-        // Page page = getPage(tid, pid, Permissions.READ_WRITE);
 
-        // page.markDirty(true, tid);
-        // try {
-        // synchronized (page) {
-        // ((HeapPage) page).deleteTuple(t);
-        // is_delete = true;
-        // }
-
-        // } catch (DbException e) {
-        // page_num++;
-        // }
-        // }
-        // if (!is_delete) {
-        // throw new DbException("BufferPool::deleteTuple: delete failed");
-        // }
     }
 
     /**
