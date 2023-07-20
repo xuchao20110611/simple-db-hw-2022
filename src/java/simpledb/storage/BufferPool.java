@@ -151,7 +151,7 @@ public class BufferPool {
                     tid_to_pids_ro_.get(tid).remove(pid);
                     lock.removeReadLock(tid);
                 }
-                
+
                 if (lock.getReadLock().size() > 0) {
                     throw new DbException("BufferPool::getPage: can not add a write lock when there are read locks");
                 }
@@ -246,8 +246,61 @@ public class BufferPool {
      * @param commit a flag indicating whether we should commit or abort
      */
     public void transactionComplete(TransactionId tid, boolean commit) {
-        // TODO: some code goes here
-        // not necessary for lab1|lab2
+        if (commit) {
+            // commit
+            if (tid_to_pids_rw_.get(tid) != null) {
+                for (PageId pid : tid_to_pids_rw_.get(tid)) {
+
+                    try {
+                        flushPage(pid);
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                    C_Lock lock = pid_to_lock_.get(pid);
+                    synchronized (lock) {
+                        lock.removeWriteLock();
+                    }
+                }
+            }
+            if (tid_to_pids_ro_.get(tid) != null) {
+                for (PageId pid : tid_to_pids_ro_.get(tid)) {
+                    // read transaction do not need to flush
+                    C_Lock lock = pid_to_lock_.get(pid);
+                    synchronized (lock) {
+                        lock.removeReadLock(tid);
+                    }
+                }
+            }
+            tid_to_pids_rw_.remove(tid);
+            tid_to_pids_ro_.remove(tid);
+
+        } else {
+            // abort
+            if (tid_to_pids_rw_.get(tid) != null) {
+
+                for (PageId pid : tid_to_pids_rw_.get(tid)) {
+                    C_Lock lock = pid_to_lock_.get(pid);
+                    DbFile dbfile = Database.getCatalog().getDatabaseFile(pid.getTableId());
+                    Page new_page = dbfile.readPage(pid);
+                    pid_to_pages_.put(pid, new_page);
+                    synchronized (lock) {
+                        lock.removeWriteLock();
+                    }
+
+                }
+            }
+            if (tid_to_pids_ro_.get(tid) != null) {
+                for (PageId pid : tid_to_pids_ro_.get(tid)) {
+                    C_Lock lock = pid_to_lock_.get(pid);
+                    synchronized (lock) {
+                        lock.removeReadLock(tid);
+                    }
+                }
+            }
+            tid_to_pids_rw_.remove(tid);
+            tid_to_pids_ro_.remove(tid);
+        }
+
     }
 
     /**
