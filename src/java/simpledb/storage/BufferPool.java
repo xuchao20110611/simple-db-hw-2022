@@ -280,9 +280,15 @@ public class BufferPool {
 
                 for (PageId pid : tid_to_pids_rw_.get(tid)) {
                     C_Lock lock = pid_to_lock_.get(pid);
-                    DbFile dbfile = Database.getCatalog().getDatabaseFile(pid.getTableId());
-                    Page new_page = dbfile.readPage(pid);
-                    pid_to_pages_.put(pid, new_page);
+                    if (pid_to_pages_.get(pid) != null) {
+                        DbFile dbfile = Database.getCatalog().getDatabaseFile(pid.getTableId());
+                        Page new_page = dbfile.readPage(pid);
+                        pid_to_pages_.put(pid, new_page);
+                    }
+
+                    // what if the page with previous writelock and then downgraded to readlock
+                    // now the second writelock aborts, the write with the previous writelock also
+                    // reverts
                     synchronized (lock) {
                         lock.removeWriteLock();
                     }
@@ -292,6 +298,15 @@ public class BufferPool {
             if (tid_to_pids_ro_.get(tid) != null) {
                 for (PageId pid : tid_to_pids_ro_.get(tid)) {
                     C_Lock lock = pid_to_lock_.get(pid);
+                    // the issue we want to solve here is, the readlock may come from a downgrade
+                    // from writelock
+                    // but there are some following issues: what if the page with the downgraded
+                    // readlock has another writelock afterwards
+                    if (pid_to_pages_.get(pid) != null) {
+                        DbFile dbfile = Database.getCatalog().getDatabaseFile(pid.getTableId());
+                        Page new_page = dbfile.readPage(pid);
+                        pid_to_pages_.put(pid, new_page);
+                    }
                     synchronized (lock) {
                         lock.removeReadLock(tid);
                     }
@@ -385,7 +400,6 @@ public class BufferPool {
      */
     public synchronized void removePage(PageId pid) {
         pid_to_pages_.remove(pid);
-        // pid_to_tid_.remove(pid.hashCode()); // question
     }
 
     /**
@@ -422,8 +436,21 @@ public class BufferPool {
      * Flushes the page to disk to ensure dirty pages are updated on disk.
      */
     private synchronized void evictPage() throws DbException {
-        // discard one page randomly
+        // discard one undirty page, if fail, randomly delete
         PageId[] keys = pid_to_pages_.keySet().toArray(new PageId[0]);
+
+        for (PageId pid : keys) {
+            if (pid_to_pages_.get(pid).isDirty() == null) {
+                try {
+                    flushPage(pid);
+                    pid_to_pages_.remove(pid);
+                    return;
+                } catch (IOException e) {
+
+                }
+            }
+        }
+
         Random random = new Random();
 
         while (true) {
