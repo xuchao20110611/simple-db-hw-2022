@@ -129,38 +129,80 @@ public class BufferPool {
             }
         }
         C_Lock lock = pid_to_lock_.get(pid);
-        synchronized (lock) {
-            if (perm.equals(Permissions.READ_ONLY)) {
-                if (tid_to_pids_rw_.get(tid) != null && tid_to_pids_rw_.get(tid).contains(pid)) {
-                    tid_to_pids_rw_.get(tid).remove(pid);
-                    lock.removeWriteLock();
-                }
-                if (lock.getWriteLock() != null && !lock.getWriteLock().equals(tid)) {
-                    throw new DbException("BufferPool::getPage: can not add a radlock when there is a write lock");
-                }
-                lock.addReadLock(tid);
 
-                tid_to_pids_ro_.putIfAbsent(tid, new HashSet<PageId>());
-                tid_to_pids_ro_.get(tid).add(pid);
+        int deadi = 0;
+        for (; deadi < 100; deadi++) {
+            try {
+                synchronized (lock) {
 
-            } else {
-                if (lock.getWriteLock() != null && !lock.getWriteLock().equals(tid)) {
-                    throw new DbException("BufferPool::getPage: can not add a write lock when there is a write lock");
+                    if (perm.equals(Permissions.READ_ONLY)) {
+                        if (tid_to_pids_rw_.get(tid) != null && tid_to_pids_rw_.get(tid).contains(pid)) {
+                            tid_to_pids_rw_.get(tid).remove(pid);
+                            lock.removeWriteLock();
+                            System.out.println("1BufferPool::getPage: remove writelock on page with page table id : "
+                                    + pid.getTableId() + " and page number: " + pid.getPageNumber() + " with tid: "
+                                    + tid.getId());
+                        }
+                        if (lock.getWriteLock() != null && !lock.getWriteLock().equals(tid)) {
+                            throw new DbException(
+                                    "BufferPool::getPage: can not add a radlock when there is a write lock"
+                                            + " with tid: " + tid.getId());
+                            // throw new TransactionAbortedException();
+                        }
+                        lock.addReadLock(tid);
+                        System.out.println("2BufferPool::getPage: add readlock on page with page table id : "
+                                + pid.getTableId() + " and page number: " + pid.getPageNumber() + " with tid: "
+                                + tid.getId());
+                        tid_to_pids_ro_.putIfAbsent(tid, new HashSet<PageId>());
+                        tid_to_pids_ro_.get(tid).add(pid);
+
+                    } else {
+                        if (lock.getWriteLock() != null && !lock.getWriteLock().equals(tid)) {
+                            throw new DbException(
+                                    "BufferPool::getPage: can not add a write lock when there is a write lock"
+                                            + " with tid: " + tid.getId());
+                            // throw new TransactionAbortedException();
+                        }
+                        if (tid_to_pids_ro_.get(tid) != null && tid_to_pids_ro_.get(tid).contains(pid)) {
+                            tid_to_pids_ro_.get(tid).remove(pid);
+                            lock.removeReadLock(tid);
+                            System.out.println("3BufferPool::getPage: remove readlock on page with page table id : "
+                                    + pid.getTableId() + " and page number: " + pid.getPageNumber() + " with tid: "
+                                    + tid.getId());
+                        }
+
+                        if (lock.getReadLock().size() > 0) {
+                            throw new TransactionAbortedException();
+                            // throw new DbException("BufferPool::getPage: can not add a write lock when
+                            // there are read locks");
+                        }
+                        lock.setWriteLock(tid);
+                        System.out.println("4BufferPool::getPage: add writelock on page with page table id : "
+                                + pid.getTableId() + " and page number: " + pid.getPageNumber() + " with tid: "
+                                + tid.getId());
+
+                        tid_to_pids_rw_.putIfAbsent(tid, new HashSet<PageId>());
+                        tid_to_pids_rw_.get(tid).add(pid);
+
+                    }
                 }
-                if (tid_to_pids_ro_.get(tid) != null && tid_to_pids_ro_.get(tid).contains(pid)) {
-                    tid_to_pids_ro_.get(tid).remove(pid);
-                    lock.removeReadLock(tid);
+
+                break;
+            } catch (Exception e) {
+                System.out.println("BufferPool::getPage: deadlock detected, try again " + deadi
+                        + " times with tid: " + tid.getId());
+
+                try {
+                    Thread.sleep(10);
+                } catch (InterruptedException e1) {
+                    // TODO Auto-generated catch block
+                    e1.printStackTrace();
                 }
-
-                if (lock.getReadLock().size() > 0) {
-                    throw new DbException("BufferPool::getPage: can not add a write lock when there are read locks");
-                }
-                lock.setWriteLock(tid);
-
-                tid_to_pids_rw_.putIfAbsent(tid, new HashSet<PageId>());
-                tid_to_pids_rw_.get(tid).add(pid);
-
             }
+
+        }
+        if (deadi == 100) {
+            throw new TransactionAbortedException();
         }
 
         if (pid_to_pages_.size() == num_pages_ && pid_to_pages_.get(pid) == null) {
@@ -192,10 +234,14 @@ public class BufferPool {
         synchronized (lock) {
             if (lock.getReadLock().contains(tid)) {
                 lock.removeReadLock(tid);
+                System.out.println("5BufferPool::unsafeReleas remove readlock on page with page table id : "
+                        + pid.getTableId() + " and page number: " + pid.getPageNumber() + " with tid: " + tid.getId());
                 tid_to_pids_ro_.get(tid).remove(pid);
             }
             if (lock.getWriteLock() != null && lock.getWriteLock().equals(tid)) {
                 lock.removeWriteLock();
+                System.out.println("6BufferPool::unsafeReleas remove writelock on page with page table id : "
+                        + pid.getTableId() + " and page number: " + pid.getPageNumber() + " with tid: " + tid.getId());
                 tid_to_pids_rw_.get(tid).remove(pid);
             }
         }
@@ -250,15 +296,20 @@ public class BufferPool {
             // commit
             if (tid_to_pids_rw_.get(tid) != null) {
                 for (PageId pid : tid_to_pids_rw_.get(tid)) {
-
-                    try {
-                        flushPage(pid);
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
                     C_Lock lock = pid_to_lock_.get(pid);
                     synchronized (lock) {
+                        try {
+                            flushPage(pid);
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                        }
+
                         lock.removeWriteLock();
+                        System.out
+                                .println(
+                                        "7BufferPool::transactioncomplete remove writelock on page with page table id : "
+                                                + pid.getTableId() + " and page number: " + pid.getPageNumber()
+                                                + " with tid: " + tid.getId());
                     }
                 }
             }
@@ -268,6 +319,11 @@ public class BufferPool {
                     C_Lock lock = pid_to_lock_.get(pid);
                     synchronized (lock) {
                         lock.removeReadLock(tid);
+                        System.out
+                                .println(
+                                        "8BufferPool::transactioncomplete remove readlock on page with page table id : "
+                                                + pid.getTableId() + " and page number: " + pid.getPageNumber()
+                                                + " with tid: " + tid.getId());
                     }
                 }
             }
@@ -291,6 +347,11 @@ public class BufferPool {
                     // reverts
                     synchronized (lock) {
                         lock.removeWriteLock();
+                        System.out
+                                .println(
+                                        "9BufferPool::transactioncomplete remove writelock on page with page table id : "
+                                                + pid.getTableId() + " and page number: " + pid.getPageNumber()
+                                                + " with tid: " + tid.getId());
                     }
 
                 }
@@ -309,6 +370,11 @@ public class BufferPool {
                     }
                     synchronized (lock) {
                         lock.removeReadLock(tid);
+                        System.out
+                                .println(
+                                        "10BufferPool::transactioncomplete remove readlock on page with page table id : "
+                                                + pid.getTableId() + " and page number: " + pid.getPageNumber()
+                                                + " with tid: " + tid.getId());
                     }
                 }
             }
