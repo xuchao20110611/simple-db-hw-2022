@@ -131,7 +131,7 @@ public class BufferPool {
         C_Lock lock = pid_to_lock_.get(pid);
 
         int deadi = 0;
-        for (; deadi < 100; deadi++) {
+        for (; deadi < 10; deadi++) {
             try {
                 synchronized (lock) {
 
@@ -201,7 +201,7 @@ public class BufferPool {
             }
 
         }
-        if (deadi == 100) {
+        if (deadi == 10) {
             throw new TransactionAbortedException();
         }
 
@@ -502,7 +502,7 @@ public class BufferPool {
      * Flushes the page to disk to ensure dirty pages are updated on disk.
      */
     private synchronized void evictPage() throws DbException {
-        // discard one undirty page, if fail, randomly delete
+        // discard one undirty page, if fail, throw exception
         PageId[] keys = pid_to_pages_.keySet().toArray(new PageId[0]);
 
         for (PageId pid : keys) {
@@ -517,20 +517,7 @@ public class BufferPool {
             }
         }
 
-        Random random = new Random();
-
-        while (true) {
-            PageId random_key = keys[random.nextInt(keys.length)];
-            try {
-                flushPage(random_key);
-                pid_to_pages_.remove(random_key);
-                // pid_to_tid_.remove(random_key);
-                break;
-            } catch (IOException e) {
-
-            }
-        }
-
+        throw new DbException("BufferPool::evictPage: all pages are dirty");
     }
 
 }
