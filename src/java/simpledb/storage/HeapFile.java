@@ -225,7 +225,7 @@ public class HeapFile implements DbFile {
             while (pageid_pos + 1 < page_num_) {
                 pageid_pos += 1;
                 PageId next_pageid = new HeapPageId(getId(), pageid_pos);
-                Page next_page = Database.getBufferPool().getPage(tid_, next_pageid, Permissions.READ_ONLY);
+                Page next_page = Database.getBufferPool().getPage(tid_, next_pageid, Permissions.READ_WRITE);
                 Iterator<Tuple> tuple_ite = ((HeapPage) next_page).iterator();
                 if (tuple_ite.hasNext()) {
                     return true;
@@ -245,7 +245,7 @@ public class HeapFile implements DbFile {
             while (pageid_pos_ + 1 < page_num_) {
                 pageid_pos_ += 1;
                 PageId next_pageid = new HeapPageId(getId(), pageid_pos_);
-                Page next_page = Database.getBufferPool().getPage(tid_, next_pageid, Permissions.READ_ONLY);
+                Page next_page = Database.getBufferPool().getPage(tid_, next_pageid, Permissions.READ_WRITE);
                 tuple_ite_ = ((HeapPage) next_page).iterator();
                 if (tuple_ite_.hasNext()) {
                     return tuple_ite_.next();
@@ -259,7 +259,7 @@ public class HeapFile implements DbFile {
         public void open() throws DbException, TransactionAbortedException {
             pageid_pos_ = 0;
             PageId next_pageid = new HeapPageId(getId(), pageid_pos_);
-            Page next_page = Database.getBufferPool().getPage(tid_, next_pageid, Permissions.READ_ONLY);
+            Page next_page = Database.getBufferPool().getPage(tid_, next_pageid, Permissions.READ_WRITE);
             tuple_ite_ = ((HeapPage) next_page).iterator();
             // System.out.println("HeapFileIterator.open()");
         }
@@ -268,7 +268,7 @@ public class HeapFile implements DbFile {
         public void rewind() throws DbException, TransactionAbortedException {
             pageid_pos_ = 0;
             PageId next_pageid = new HeapPageId(getId(), pageid_pos_);
-            Page next_page = Database.getBufferPool().getPage(tid_, next_pageid, Permissions.READ_ONLY);
+            Page next_page = Database.getBufferPool().getPage(tid_, next_pageid, Permissions.READ_WRITE);
             tuple_ite_ = ((HeapPage) next_page).iterator();
         }
 

@@ -12,6 +12,8 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * BufferPool manages the reading and writing of pages into memory from
@@ -41,9 +43,43 @@ public class BufferPool {
 
     private int num_pages_ = 0;
 
-    private ConcurrentHashMap<Integer, Page> pid_to_pages_ = new ConcurrentHashMap<Integer, Page>();
-    private ConcurrentHashMap<Integer, TransactionId> pid_to_tid_ = new ConcurrentHashMap<Integer, TransactionId>();
-    private ConcurrentHashMap<TransactionId, Permissions> tid_to_permission_ = new ConcurrentHashMap<TransactionId, Permissions>();
+    private ConcurrentHashMap<PageId, Page> pid_to_pages_ = new ConcurrentHashMap<PageId, Page>();
+
+    private ConcurrentHashMap<TransactionId, Set<PageId>> tid_to_pids_rw_ = new ConcurrentHashMap<TransactionId, Set<PageId>>();
+    private ConcurrentHashMap<TransactionId, Set<PageId>> tid_to_pids_ro_ = new ConcurrentHashMap<TransactionId, Set<PageId>>();
+    private ConcurrentHashMap<PageId, C_Lock> pid_to_lock_ = new ConcurrentHashMap<PageId, C_Lock>();
+
+    private class C_Lock {
+        private Set<TransactionId> read_lock_ = new HashSet<TransactionId>();
+        private TransactionId write_lock_ = null;
+
+        public C_Lock() {
+        }
+
+        public Set<TransactionId> getReadLock() {
+            return read_lock_;
+        }
+
+        public void addReadLock(TransactionId tid) {
+            read_lock_.add(tid);
+        }
+
+        public void removeReadLock(TransactionId tid) {
+            read_lock_.remove(tid);
+        }
+
+        public TransactionId getWriteLock() {
+            return write_lock_;
+        }
+
+        public void removeWriteLock() {
+            write_lock_ = null;
+        }
+
+        public void setWriteLock(TransactionId tid) {
+            write_lock_ = tid;
+        }
+    }
 
     /**
      * Creates a BufferPool that caches up to numPages pages.
@@ -85,20 +121,102 @@ public class BufferPool {
      */
     public Page getPage(TransactionId tid, PageId pid, Permissions perm)
             throws TransactionAbortedException, DbException {
-        tid_to_permission_.put(tid, perm);
-        if (pid_to_pages_.size() == num_pages_ && pid_to_pages_.get(pid.getPageNumber()) == null) {
+
+        // tid_to_permission_.put(tid, perm);
+        synchronized (pid_to_lock_) {
+            if (pid_to_lock_.get(pid) == null) {
+                pid_to_lock_.put(pid, new C_Lock());
+            }
+        }
+        C_Lock lock = pid_to_lock_.get(pid);
+
+        int deadi = 0;
+        for (; deadi < 10; deadi++) {
+            try {
+                synchronized (lock) {
+
+                    if (perm.equals(Permissions.READ_ONLY)) {
+                        if (tid_to_pids_rw_.get(tid) != null && tid_to_pids_rw_.get(tid).contains(pid)) {
+                            tid_to_pids_rw_.get(tid).remove(pid);
+                            lock.removeWriteLock();
+                            System.out.println("1BufferPool::getPage: remove writelock on page with page table id : "
+                                    + pid.getTableId() + " and page number: " + pid.getPageNumber() + " with tid: "
+                                    + tid.getId());
+                        }
+                        if (lock.getWriteLock() != null && !lock.getWriteLock().equals(tid)) {
+                            throw new DbException(
+                                    "BufferPool::getPage: can not add a radlock when there is a write lock"
+                                            + " with tid: " + tid.getId());
+                            // throw new TransactionAbortedException();
+                        }
+                        lock.addReadLock(tid);
+                        System.out.println("2BufferPool::getPage: add readlock on page with page table id : "
+                                + pid.getTableId() + " and page number: " + pid.getPageNumber() + " with tid: "
+                                + tid.getId());
+                        tid_to_pids_ro_.putIfAbsent(tid, new HashSet<PageId>());
+                        tid_to_pids_ro_.get(tid).add(pid);
+
+                    } else {
+                        if (lock.getWriteLock() != null && !lock.getWriteLock().equals(tid)) {
+                            throw new DbException(
+                                    "BufferPool::getPage: can not add a write lock when there is a write lock"
+                                            + " with tid: " + tid.getId());
+                            // throw new TransactionAbortedException();
+                        }
+                        if (tid_to_pids_ro_.get(tid) != null && tid_to_pids_ro_.get(tid).contains(pid)) {
+                            tid_to_pids_ro_.get(tid).remove(pid);
+                            lock.removeReadLock(tid);
+                            System.out.println("3BufferPool::getPage: remove readlock on page with page table id : "
+                                    + pid.getTableId() + " and page number: " + pid.getPageNumber() + " with tid: "
+                                    + tid.getId());
+                        }
+
+                        if (lock.getReadLock().size() > 0) {
+                            throw new TransactionAbortedException();
+                            // throw new DbException("BufferPool::getPage: can not add a write lock when
+                            // there are read locks");
+                        }
+                        lock.setWriteLock(tid);
+                        System.out.println("4BufferPool::getPage: add writelock on page with page table id : "
+                                + pid.getTableId() + " and page number: " + pid.getPageNumber() + " with tid: "
+                                + tid.getId());
+
+                        tid_to_pids_rw_.putIfAbsent(tid, new HashSet<PageId>());
+                        tid_to_pids_rw_.get(tid).add(pid);
+
+                    }
+                }
+
+                break;
+            } catch (Exception e) {
+                System.out.println("BufferPool::getPage: deadlock detected, try again " + deadi
+                        + " times with tid: " + tid.getId());
+
+                try {
+                    Thread.sleep(10);
+                } catch (InterruptedException e1) {
+                    // TODO Auto-generated catch block
+                    e1.printStackTrace();
+                }
+            }
+
+        }
+        if (deadi == 10) {
+            throw new TransactionAbortedException();
+        }
+
+        if (pid_to_pages_.size() == num_pages_ && pid_to_pages_.get(pid) == null) {
             evictPage();
         }
-        // int table_page_id = pid.getTableId() * 1025 + pid.getPageNumber();
-        int table_page_id = pid.hashCode();
 
-        pid_to_tid_.put(table_page_id, tid);
+        // tid_to_pids_.putIfAbsent(tid, new HashSet<PageId>());
+        // tid_to_pids_.get(tid).add(pid);
         DbFile dbfile = Database.getCatalog().getDatabaseFile(pid.getTableId());
-        if (pid_to_pages_.get(table_page_id) == null) {
-            pid_to_pages_.put(table_page_id, dbfile.readPage(pid));
+        if (pid_to_pages_.get(pid) == null) {
+            pid_to_pages_.put(pid, dbfile.readPage(pid));
         }
 
-        return pid_to_pages_.get(table_page_id);
+        return pid_to_pages_.get(pid);
     }
 
     /**
@@ -111,8 +229,34 @@ public class BufferPool {
      * @param pid the ID of the page to unlock
      */
     public void unsafeReleasePage(TransactionId tid, PageId pid) {
-        // TODO: some code goes here
-        // not necessary for lab1|lab2
+
+        C_Lock lock = pid_to_lock_.get(pid);
+        synchronized (lock) {
+            if (lock.getReadLock().contains(tid)) {
+                lock.removeReadLock(tid);
+                System.out.println("5BufferPool::unsafeReleas remove readlock on page with page table id : "
+                        + pid.getTableId() + " and page number: " + pid.getPageNumber() + " with tid: " + tid.getId());
+                tid_to_pids_ro_.get(tid).remove(pid);
+            }
+            if (lock.getWriteLock() != null && lock.getWriteLock().equals(tid)) {
+                lock.removeWriteLock();
+                System.out.println("6BufferPool::unsafeReleas remove writelock on page with page table id : "
+                        + pid.getTableId() + " and page number: " + pid.getPageNumber() + " with tid: " + tid.getId());
+                tid_to_pids_rw_.get(tid).remove(pid);
+            }
+        }
+        // if (tid_to_pids_ro_.get(tid) != null &&
+        // tid_to_pids_ro_.get(tid).contains(pid)) {
+        // tid_to_pids_ro_.get(tid).remove(pid);
+        // pid_to_lock_.get(pid).readLock().unlock();
+        // }
+
+        // if (tid_to_pids_rw_.get(tid) != null &&
+        // tid_to_pids_rw_.get(tid).contains(pid)) {
+        // tid_to_pids_rw_.get(tid).remove(pid);
+        // pid_to_lock_.get(pid).writeLock().unlock();
+        // }
+
     }
 
     /**
@@ -121,16 +265,22 @@ public class BufferPool {
      * @param tid the ID of the transaction requesting the unlock
      */
     public void transactionComplete(TransactionId tid) {
-        // TODO: some code goes here
-        // not necessary for lab1|lab2
+        transactionComplete(tid, true);
     }
 
     /**
      * Return true if the specified transaction has a lock on the specified page
      */
     public boolean holdsLock(TransactionId tid, PageId p) {
-        // TODO: some code goes here
-        // not necessary for lab1|lab2
+
+        if (tid_to_pids_ro_.get(tid) != null && tid_to_pids_ro_.get(tid).contains(p)) {
+            return true;
+        }
+
+        if (tid_to_pids_rw_.get(tid) != null && tid_to_pids_rw_.get(tid).contains(p)) {
+            return true;
+        }
+
         return false;
     }
 
@@ -142,8 +292,96 @@ public class BufferPool {
      * @param commit a flag indicating whether we should commit or abort
      */
     public void transactionComplete(TransactionId tid, boolean commit) {
-        // TODO: some code goes here
-        // not necessary for lab1|lab2
+        if (commit) {
+            // commit
+            if (tid_to_pids_rw_.get(tid) != null) {
+                for (PageId pid : tid_to_pids_rw_.get(tid)) {
+                    C_Lock lock = pid_to_lock_.get(pid);
+                    synchronized (lock) {
+                        try {
+                            flushPage(pid);
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                        }
+
+                        lock.removeWriteLock();
+                        System.out
+                                .println(
+                                        "7BufferPool::transactioncomplete remove writelock on page with page table id : "
+                                                + pid.getTableId() + " and page number: " + pid.getPageNumber()
+                                                + " with tid: " + tid.getId());
+                    }
+                }
+            }
+            if (tid_to_pids_ro_.get(tid) != null) {
+                for (PageId pid : tid_to_pids_ro_.get(tid)) {
+                    // read transaction do not need to flush
+                    C_Lock lock = pid_to_lock_.get(pid);
+                    synchronized (lock) {
+                        lock.removeReadLock(tid);
+                        System.out
+                                .println(
+                                        "8BufferPool::transactioncomplete remove readlock on page with page table id : "
+                                                + pid.getTableId() + " and page number: " + pid.getPageNumber()
+                                                + " with tid: " + tid.getId());
+                    }
+                }
+            }
+            tid_to_pids_rw_.remove(tid);
+            tid_to_pids_ro_.remove(tid);
+
+        } else {
+            // abort
+            if (tid_to_pids_rw_.get(tid) != null) {
+
+                for (PageId pid : tid_to_pids_rw_.get(tid)) {
+                    C_Lock lock = pid_to_lock_.get(pid);
+                    if (pid_to_pages_.get(pid) != null) {
+                        DbFile dbfile = Database.getCatalog().getDatabaseFile(pid.getTableId());
+                        Page new_page = dbfile.readPage(pid);
+                        pid_to_pages_.put(pid, new_page);
+                    }
+
+                    // what if the page with previous writelock and then downgraded to readlock
+                    // now the second writelock aborts, the write with the previous writelock also
+                    // reverts
+                    synchronized (lock) {
+                        lock.removeWriteLock();
+                        System.out
+                                .println(
+                                        "9BufferPool::transactioncomplete remove writelock on page with page table id : "
+                                                + pid.getTableId() + " and page number: " + pid.getPageNumber()
+                                                + " with tid: " + tid.getId());
+                    }
+
+                }
+            }
+            if (tid_to_pids_ro_.get(tid) != null) {
+                for (PageId pid : tid_to_pids_ro_.get(tid)) {
+                    C_Lock lock = pid_to_lock_.get(pid);
+                    // the issue we want to solve here is, the readlock may come from a downgrade
+                    // from writelock
+                    // but there are some following issues: what if the page with the downgraded
+                    // readlock has another writelock afterwards
+                    if (pid_to_pages_.get(pid) != null) {
+                        DbFile dbfile = Database.getCatalog().getDatabaseFile(pid.getTableId());
+                        Page new_page = dbfile.readPage(pid);
+                        pid_to_pages_.put(pid, new_page);
+                    }
+                    synchronized (lock) {
+                        lock.removeReadLock(tid);
+                        System.out
+                                .println(
+                                        "10BufferPool::transactioncomplete remove readlock on page with page table id : "
+                                                + pid.getTableId() + " and page number: " + pid.getPageNumber()
+                                                + " with tid: " + tid.getId());
+                    }
+                }
+            }
+            tid_to_pids_rw_.remove(tid);
+            tid_to_pids_ro_.remove(tid);
+        }
+
     }
 
     /**
@@ -166,40 +404,15 @@ public class BufferPool {
 
         // int page_num = 0;
         // boolean is_insert = false;
-        tid_to_permission_.put(tid, Permissions.READ_WRITE);
+
         List<Page> modified_page = Database.getCatalog().getDatabaseFile(tableId).insertTuple(tid, t);
         for (Page page : modified_page) {
             page.markDirty(true, tid);
-            int page_num = page.getId().getPageNumber();
-            pid_to_pages_.put(tableId * 1025 + page_num, page);
-            pid_to_tid_.put(tableId * 1025 + page_num, tid);
+            pid_to_pages_.put(page.getId(), page);
+            // tid_to_pids_rw_.putIfAbsent(tid, new HashSet<PageId>());
+            // tid_to_pids_rw_.get(tid).add(page.getId());
         }
-        // while (!is_insert) {
-        // PageId pid = new HeapPageId(tableId, page_num);
-        // Page page = getPage(tid, pid, Permissions.READ_WRITE);
 
-        // page.markDirty(true, tid);
-        // try {
-        // synchronized (page) {
-        // ((HeapPage) page).insertTuple(t);
-        // is_insert = true;
-        // }
-
-        // } catch (DbException e) {
-        // page_num++;
-        // }
-
-        // }
-        // if (!is_insert) {
-        // // make a new page
-        // HeapPageId pid = new HeapPageId(tableId, page_num);
-        // HeapPage page = new HeapPage(pid, HeapPage.createEmptyPageData());
-        // int table_page_id = pid.hashCode();
-        // // unimplemented: eviction rules
-        // pid_to_pages_.put(table_page_id, page);
-        // pid_to_tid_.put(table_page_id, tid);
-        // page.insertTuple(t);
-        // }
     }
 
     /**
@@ -219,34 +432,15 @@ public class BufferPool {
             throws DbException, IOException, TransactionAbortedException {
         // int page_num = 0;
         // boolean is_delete = false;
-        tid_to_permission_.put(tid, Permissions.READ_WRITE);
         int tableId = t.getRecordId().getPageId().getTableId();
         List<Page> modified_page = Database.getCatalog().getDatabaseFile(tableId).deleteTuple(tid, t);
         for (Page page : modified_page) {
             page.markDirty(true, tid);
-            int page_num = page.getId().getPageNumber();
-            pid_to_pages_.put(tableId * 1025 + page_num, page);
-            pid_to_tid_.put(tableId * 1025 + page_num, tid);
+            pid_to_pages_.put(page.getId(), page);
+            // tid_to_pids_rw_.putIfAbsent(tid, new HashSet<PageId>());
+            // tid_to_pids_rw_.get(tid).add(page.getId());
         }
-        // while (!is_delete) {
-        // PageId pid = new HeapPageId(t.getRecordId().getPageId().getTableId(),
-        // page_num);
-        // Page page = getPage(tid, pid, Permissions.READ_WRITE);
 
-        // page.markDirty(true, tid);
-        // try {
-        // synchronized (page) {
-        // ((HeapPage) page).deleteTuple(t);
-        // is_delete = true;
-        // }
-
-        // } catch (DbException e) {
-        // page_num++;
-        // }
-        // }
-        // if (!is_delete) {
-        // throw new DbException("BufferPool::deleteTuple: delete failed");
-        // }
     }
 
     /**
@@ -255,9 +449,9 @@ public class BufferPool {
      * break simpledb if running in NO STEAL mode.
      */
     public synchronized void flushAllPages() throws IOException {
-        for (int pid : pid_to_pages_.keySet()) {
-            HeapPageId heap_page_id = new HeapPageId(pid / 1025, pid % 1025);
-            flushPage(heap_page_id);
+        for (PageId pid : pid_to_pages_.keySet()) {
+
+            flushPage(pid);
         }
     }
 
@@ -271,8 +465,7 @@ public class BufferPool {
      * are removed from the cache so they can be reused safely
      */
     public synchronized void removePage(PageId pid) {
-        pid_to_pages_.remove(pid.hashCode());
-        pid_to_tid_.remove(pid.hashCode());
+        pid_to_pages_.remove(pid);
     }
 
     /**
@@ -281,8 +474,10 @@ public class BufferPool {
      * @param pid an ID indicating the page to flush
      */
     private synchronized void flushPage(PageId pid) throws IOException {
-        int table_page_id = pid.hashCode();
-        Page page = pid_to_pages_.get(table_page_id);
+
+        Page page = pid_to_pages_.get(pid);
+        if (page == null)
+            return;
         if (page.isDirty() != null) {
             Database.getCatalog().getDatabaseFile(pid.getTableId()).writePage(page);
             page.markDirty(false, null);
@@ -294,10 +489,11 @@ public class BufferPool {
      * Write all pages of the specified transaction to disk.
      */
     public synchronized void flushPages(TransactionId tid) throws IOException {
-        for (int pid : pid_to_pages_.keySet()) {
-            if (pid_to_tid_.get(pid).equals(tid)) {
-                flushPage(pid_to_pages_.get(pid).getId());
-            }
+        for (PageId pid : tid_to_pids_rw_.get(tid)) {
+            flushPage(pid);
+        }
+        for (PageId pid : tid_to_pids_ro_.get(tid)) {
+            flushPage(pid);
         }
     }
 
@@ -306,22 +502,22 @@ public class BufferPool {
      * Flushes the page to disk to ensure dirty pages are updated on disk.
      */
     private synchronized void evictPage() throws DbException {
-        // discard one page randomly
-        Integer[] keys = pid_to_pages_.keySet().toArray(new Integer[0]);
-        Random random = new Random();
+        // discard one undirty page, if fail, throw exception
+        PageId[] keys = pid_to_pages_.keySet().toArray(new PageId[0]);
 
-        while (true) {
-            Integer random_key = keys[random.nextInt(keys.length)];
-            try {
-                flushPage(pid_to_pages_.get(random_key).getId());
-                pid_to_pages_.remove(random_key);
-                pid_to_tid_.remove(random_key);
-                break;
-            } catch (IOException e) {
+        for (PageId pid : keys) {
+            if (pid_to_pages_.get(pid).isDirty() == null) {
+                try {
+                    flushPage(pid);
+                    pid_to_pages_.remove(pid);
+                    return;
+                } catch (IOException e) {
 
+                }
             }
         }
 
+        throw new DbException("BufferPool::evictPage: all pages are dirty");
     }
 
 }
