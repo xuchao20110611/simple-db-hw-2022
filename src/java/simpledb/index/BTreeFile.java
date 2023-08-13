@@ -705,11 +705,40 @@ public class BTreeFile implements DbFile {
      */
     public void stealFromLeafPage(BTreeLeafPage page, BTreeLeafPage sibling,
             BTreeInternalPage parent, BTreeEntry entry, boolean isRightSibling) throws DbException {
-        // TODO: some code goes here
-        //
+
         // Move some of the tuples from the sibling to the page so
         // that the tuples are evenly distributed. Be sure to update
         // the corresponding parent entry.
+        int num = sibling.getNumTuples() - page.getNumTuples();
+        if (num < 0) {
+            throw new DbException("BTreeFile::stealFromLeafPage: num<0");
+        }
+        num = num / 2;
+        // parent.deleteKeyAndRightChild(entry);
+        if (isRightSibling) {
+            Iterator<Tuple> ite = sibling.iterator();
+            Tuple tuple = null;
+            while (num > 0) {
+                tuple = ite.next();
+                sibling.deleteTuple(tuple);
+                page.insertTuple(tuple);
+                num--;
+            }
+            tuple = ite.next();
+            entry.setKey(tuple.getField(keyField));
+        } else {
+            Iterator<Tuple> ite = sibling.reverseIterator();
+            Tuple tuple = null;
+            while (num > 0) {
+                tuple = ite.next();
+                sibling.deleteTuple(tuple);
+                page.insertTuple(tuple);
+                num--;
+            }
+            tuple = page.iterator().next();
+            entry.setKey(tuple.getField(keyField));
+        }
+        // parent.insertEntry(entry);
     }
 
     /**
@@ -795,11 +824,37 @@ public class BTreeFile implements DbFile {
     public void stealFromLeftInternalPage(TransactionId tid, Map<PageId, Page> dirtypages,
             BTreeInternalPage page, BTreeInternalPage leftSibling, BTreeInternalPage parent,
             BTreeEntry parentEntry) throws DbException, TransactionAbortedException {
-        // TODO: some code goes here
         // Move some of the entries from the left sibling to the page so
         // that the entries are evenly distributed. Be sure to update
         // the corresponding parent entry. Be sure to update the parent
         // pointers of all children in the entries that were moved.
+        int num = leftSibling.getNumEntries() - page.getNumEntries();
+        num = num / 2;
+        if (num < 0) {
+            throw new DbException("BTreeFile::stealFromLeftInternalPage: num<0");
+        }
+        Iterator<BTreeEntry> ite = leftSibling.reverseIterator();
+        while (num > 0) {
+            BTreeEntry entry = ite.next();
+            parent.deleteKeyAndRightChild(parentEntry);
+            leftSibling.deleteKeyAndRightChild(entry);
+
+            parentEntry.setLeftChild(entry.getRightChild());
+            parentEntry.setRightChild(page.iterator().next().getLeftChild());
+            entry.setLeftChild(leftSibling.getId());
+            entry.setRightChild(page.getId());
+
+            page.insertEntry(parentEntry);
+            parent.insertEntry(entry);
+
+            parentEntry = entry;
+
+            num--;
+        }
+        updateParentPointers(tid, dirtypages, page);
+        updateParentPointers(tid, dirtypages, leftSibling);
+        updateParentPointers(tid, dirtypages, parent);
+
     }
 
     /**
@@ -826,11 +881,37 @@ public class BTreeFile implements DbFile {
     public void stealFromRightInternalPage(TransactionId tid, Map<PageId, Page> dirtypages,
             BTreeInternalPage page, BTreeInternalPage rightSibling, BTreeInternalPage parent,
             BTreeEntry parentEntry) throws DbException, TransactionAbortedException {
-        // TODO: some code goes here
+
         // Move some of the entries from the right sibling to the page so
         // that the entries are evenly distributed. Be sure to update
         // the corresponding parent entry. Be sure to update the parent
         // pointers of all children in the entries that were moved.
+        int num = rightSibling.getNumEntries() - page.getNumEntries();
+        if (num < 0) {
+            throw new DbException("BTreeFile::stealFromRightInternalPage: num<0");
+        }
+        num = num / 2;
+        Iterator<BTreeEntry> ite = rightSibling.iterator();
+        while (num > 0) {
+            BTreeEntry entry = ite.next();
+            rightSibling.deleteKeyAndLeftChild(entry);
+            parent.deleteKeyAndRightChild(parentEntry);
+
+            parentEntry.setRightChild(entry.getLeftChild());
+            parentEntry.setLeftChild(page.reverseIterator().next().getRightChild());
+            entry.setLeftChild(page.getId());
+            entry.setRightChild(rightSibling.getId());
+
+            parent.insertEntry(entry);
+            page.insertEntry(parentEntry);
+
+            parentEntry = entry;
+
+            num--;
+        }
+        updateParentPointers(tid, dirtypages, page);
+        updateParentPointers(tid, dirtypages, rightSibling);
+        updateParentPointers(tid, dirtypages, parent);
     }
 
     /**
