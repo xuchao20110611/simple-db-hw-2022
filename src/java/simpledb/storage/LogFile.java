@@ -491,16 +491,14 @@ public class LogFile {
                     try {
                         int cpType = raf.readInt();
                         long cpTid = raf.readLong();
-                        if (cpTid != tid.getId()) {
-                            // finish all records for this transaction
-                            break;
-                        }
 
                         if (cpType == UPDATE_RECORD) {
                             Page before = readPageData(raf);
                             Page after = readPageData(raf);
-                            Database.getBufferPool().removePage(after.getId());
-                            Database.getCatalog().getDatabaseFile(before.getId().getTableId()).writePage(before);
+                            if (cpTid == tid.getId()) {
+                                Database.getBufferPool().removePage(after.getId());
+                                Database.getCatalog().getDatabaseFile(before.getId().getTableId()).writePage(before);
+                            }
                         }
                         long startOffset = raf.readLong(); // move pointer for a length of long var
                     } catch (EOFException e) {
