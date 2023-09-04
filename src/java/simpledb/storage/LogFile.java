@@ -535,7 +535,68 @@ public class LogFile {
         synchronized (Database.getBufferPool()) {
             synchronized (this) {
                 recoveryUndecided = false;
-                // TODO: some code goes here
+                raf.seek(0);
+                long startCpOffset = raf.readLong();
+                tidToFirstLogRecord.clear();
+                if (startCpOffset == -1) {
+                    startCpOffset = 0; // no checkpoint
+                    raf.seek(startCpOffset);
+                    while (true) {
+                        try {
+                            int cpType = raf.readInt();
+                            long cpTid = raf.readLong();
+                            if (cpType == UPDATE_RECORD) {
+                                Page before = readPageData(raf);
+                                Page after = readPageData(raf);
+                                Database.getBufferPool().removePage(after.getId());
+                                Database.getCatalog().getDatabaseFile(before.getId().getTableId()).writePage(before);
+                            }
+                            raf.readLong(); // move pointer for a length of long var
+                        } catch (EOFException e) {
+                            break;
+                        }
+                    }
+
+                } else {
+                    raf.seek(startCpOffset);
+                    int cpType = raf.readInt();
+                    long cpTid = raf.readLong();
+                    if (cpType != CHECKPOINT_RECORD) {
+                        throw new RuntimeException("Checkpoint pointer does not point to checkpoint record");
+                    }
+                    int numOutstanding = raf.readInt();
+                    while (numOutstanding > 0) {
+                        numOutstanding--;
+                        long tid = raf.readLong();
+                        long firstLogRecord = raf.readLong();
+                        tidToFirstLogRecord.put(tid, firstLogRecord);
+                    }
+
+                    for (Long tid : tidToFirstLogRecord.keySet()) {
+                        long firstLogRecord = tidToFirstLogRecord.get(tid);
+                        raf.seek(firstLogRecord);
+                        while (true) {
+                            try {
+                                int cpType2 = raf.readInt();
+                                long cpTid2 = raf.readLong();
+                                if (cpType2 == UPDATE_RECORD) {
+                                    Page before = readPageData(raf);
+                                    Page after = readPageData(raf);
+                                    if (cpTid2 == tid) {
+                                        Database.getBufferPool().removePage(after.getId());
+                                        Database.getCatalog().getDatabaseFile(before.getId().getTableId())
+                                                .writePage(before);
+                                    }
+                                }
+                                long startOffset = raf.readLong();
+
+                            } catch (EOFException e) {
+                                break;
+                            }
+                        }
+                    }
+
+                }
             }
         }
     }
