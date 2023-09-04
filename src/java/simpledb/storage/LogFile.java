@@ -536,28 +536,16 @@ public class LogFile {
             synchronized (this) {
                 recoveryUndecided = false;
                 raf.seek(0);
-                long startCpOffset = raf.readLong();
+                Long startCpOffset = raf.readLong();
                 tidToFirstLogRecord.clear();
-                if (startCpOffset == -1) {
-                    startCpOffset = 0; // no checkpoint
-                    raf.seek(startCpOffset);
-                    while (true) {
-                        try {
-                            int cpType = raf.readInt();
-                            long cpTid = raf.readLong();
-                            if (cpType == UPDATE_RECORD) {
-                                Page before = readPageData(raf);
-                                Page after = readPageData(raf);
-                                Database.getBufferPool().removePage(after.getId());
-                                Database.getCatalog().getDatabaseFile(before.getId().getTableId()).writePage(before);
-                            }
-                            raf.readLong(); // move pointer for a length of long var
-                        } catch (EOFException e) {
-                            break;
-                        }
-                    }
+                HashSet<Long> commitedTids = new HashSet<>();
+                HashSet<Long> abortedTids = new HashSet<>();
+                HashMap<Long, HashSet<Page>> beforePages = new HashMap<>();
+                HashMap<Long, HashSet<Page>> afterPages = new HashMap<>();
+                if (startCpOffset == -1l) {
 
                 } else {
+
                     raf.seek(startCpOffset);
                     int cpType = raf.readInt();
                     long cpTid = raf.readLong();
@@ -565,38 +553,79 @@ public class LogFile {
                         throw new RuntimeException("Checkpoint pointer does not point to checkpoint record");
                     }
                     int numOutstanding = raf.readInt();
+                    Long first_start = Long.MAX_VALUE;
                     while (numOutstanding > 0) {
                         numOutstanding--;
-                        long tid = raf.readLong();
-                        long firstLogRecord = raf.readLong();
+                        Long tid = raf.readLong();
+                        Long firstLogRecord = raf.readLong();
+                        if (first_start > firstLogRecord) {
+                            first_start = firstLogRecord;
+                        }
                         tidToFirstLogRecord.put(tid, firstLogRecord);
                     }
 
-                    for (Long tid : tidToFirstLogRecord.keySet()) {
-                        long firstLogRecord = tidToFirstLogRecord.get(tid);
-                        raf.seek(firstLogRecord);
-                        while (true) {
-                            try {
-                                int cpType2 = raf.readInt();
-                                long cpTid2 = raf.readLong();
-                                if (cpType2 == UPDATE_RECORD) {
-                                    Page before = readPageData(raf);
-                                    Page after = readPageData(raf);
-                                    if (cpTid2 == tid) {
-                                        Database.getBufferPool().removePage(after.getId());
-                                        Database.getCatalog().getDatabaseFile(before.getId().getTableId())
-                                                .writePage(before);
-                                    }
-                                }
-                                long startOffset = raf.readLong();
+                    raf.seek(first_start);
+                    // while (true) {
+                    // try {
+                    // int cpType2 = raf.readInt();
+                    // long cpTid2 = raf.readLong();
+                    // if (cpType2 == UPDATE_RECORD) {
+                    // Page before = readPageData(raf);
+                    // Page after = readPageData(raf);
+                    // beforePages.putIfAbsent(cpTid2, new HashSet<>());
+                    // beforePages.get(cpTid2).add(before);
+                    // afterPages.putIfAbsent(cpTid2, new HashSet<>());
+                    // afterPages.get(cpTid2).add(after);
+                    // } else if (cpType2 == COMMIT_RECORD) {
+                    // commitedTids.add(cpTid);
+                    // } else if (cpType == ABORT_RECORD) {
+                    // abortedTids.add(cpTid);
+                    // }
+                    // long startOffset = raf.readLong();
 
-                            } catch (EOFException e) {
-                                break;
-                            }
-                        }
-                    }
+                    // } catch (EOFException e) {
+                    // break;
+                    // }
+
+                    // }
 
                 }
+                while (true) {
+                    try {
+                        int cpType = raf.readInt();
+                        Long cpTid = raf.readLong();
+                        if (cpType == UPDATE_RECORD) {
+                            Page before = readPageData(raf);
+                            Page after = readPageData(raf);
+                            beforePages.putIfAbsent(cpTid, new HashSet<>());
+                            beforePages.get(cpTid).add(before);
+                            afterPages.putIfAbsent(cpTid, new HashSet<>());
+                            afterPages.get(cpTid).add(after);
+                            // Database.getBufferPool().removePage(after.getId());
+                            // Database.getCatalog().getDatabaseFile(before.getId().getTableId()).writePage(before);
+                        } else if (cpType == COMMIT_RECORD) {
+                            commitedTids.add(cpTid);
+                        } else if (cpType == ABORT_RECORD) {
+                            abortedTids.add(cpTid);
+                        }
+                        raf.readLong(); // move pointer for a length of long var
+                    } catch (EOFException e) {
+                        break;
+                    }
+                }
+
+                for (Long tid : beforePages.keySet()) {
+                    if (!commitedTids.contains(tid) && !abortedTids.contains(tid)) {
+                        // not commited
+                        for (Page before : beforePages.get(tid)) {
+                            Database.getCatalog().getDatabaseFile(before.getId().getTableId()).writePage(before);
+                        }
+                        for (Page after : afterPages.get(tid)) {
+                            Database.getBufferPool().removePage(after.getId());
+                        }
+                    }
+                }
+
             }
         }
     }
