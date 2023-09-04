@@ -300,6 +300,9 @@ public class BufferPool {
                     synchronized (lock) {
                         try {
                             flushPage(pid);
+                            // use current page contents as the before-image
+                            // for the next transaction that modifies this page.
+                            pid_to_pages_.get(pid).setBeforeImage();
                         } catch (IOException e) {
                             e.printStackTrace();
                         }
@@ -479,6 +482,13 @@ public class BufferPool {
         if (page == null)
             return;
         if (page.isDirty() != null) {
+            // append an update record to the log, with
+            // a before-image and after-image.
+            TransactionId dirtier = page.isDirty();
+            if (dirtier != null) {
+                Database.getLogFile().logWrite(dirtier, page.getBeforeImage(), page);
+                Database.getLogFile().force();
+            }
             Database.getCatalog().getDatabaseFile(pid.getTableId()).writePage(page);
             page.markDirty(false, null);
         }
